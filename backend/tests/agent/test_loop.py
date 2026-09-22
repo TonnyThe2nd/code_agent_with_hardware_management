@@ -14,6 +14,63 @@ from src.agent.domain.services import AgentLoop
 from src.agent.domain.value_objects import Message, MessageRole, ToolCall, ToolResult
 
 
+def test_cli_defaults_and_rich_output(monkeypatch: Any) -> None:
+    from typer.testing import CliRunner
+    from src.main import app
+    from src.agent.presentation import cli
+
+    printed: list[tuple[str, dict[str, Any]]] = []
+    configured: dict[str, Any] = {}
+
+    class FakeConsole:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def print(self, text: str, **kwargs: Any) -> None:
+            printed.append((text, kwargs))
+
+    class Registry:
+        def schemas(self) -> list[dict[str, Any]]:
+            return [{"type": "function", "function": {"name": "read_file"}}]
+
+        def execute(self, call: ToolCall) -> ToolResult:
+            return ToolResult(call.id, call.name, "x" * 250)
+
+    def registry_factory(workspace: Path) -> Registry:
+        configured["workspace"] = workspace
+        return Registry()
+
+    def provider_factory(model: str, tools_schema: list[dict[str, Any]]) -> FakeLLM:
+        configured["model"] = model
+        configured["schemas"] = tools_schema
+        return FakeLLM([
+            Message(MessageRole.ASSISTANT, "[bold]Reading[/bold]", (
+                ToolCall("1", "read_file", (("path", "file.txt"),)),
+            )),
+            Message(MessageRole.ASSISTANT, "Done"),
+        ])
+
+    monkeypatch.setattr(cli, "Console", FakeConsole)
+    monkeypatch.setattr(cli, "build_default_registry", registry_factory)
+    monkeypatch.setattr(cli, "OllamaProvider", provider_factory)
+    result = CliRunner().invoke(app, ["agent", "run", "Read file"])
+    assert result.exit_code == 0, result.output
+    assert configured["model"] == "qwen2.5-coder:7b"
+    assert configured["workspace"] == Path.cwd().resolve()
+    assert configured["schemas"][0]["function"]["name"] == "read_file"
+    assert [options["style"] for _, options in printed] == ["cyan", "yellow", "dim", "cyan", "green"]
+    assert printed[1][0] == '→ tool: read_file({"path": "file.txt"})'
+    assert printed[2][0] == "x" * 200
+    assert all(options.get("markup") is False for _, options in printed)
+    assert printed[-1][0] == "Done"
+
+    printed.clear()
+    result = CliRunner().invoke(app, ["agent", "run", "Read file", "-w", ".", "-m", "custom", "--max-iter", "1"])
+    assert result.exit_code == 2
+    assert configured["model"] == "custom"
+    assert "Limite" in printed[-1][0]
+
+
 class FakeLLM:
     def __init__(self, responses: list[Message]) -> None:
         self.responses = responses
