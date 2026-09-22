@@ -3,6 +3,9 @@ from .value_objects import FilePath, ToolCall
 
 class SafetyPolicy:
 
+    def __init__(self, allow_tests: bool = False) -> None:
+        self._allow_tests = allow_tests
+
     allowed_commands: tuple[tuple[str, ...], ...] = (
         ("python", "--version"), ("git", "--version"),
     )
@@ -41,7 +44,8 @@ class SafetyPolicy:
                 return False, str(exc)
         if call.name == "run_command":
             command = arguments["command"]
-            if not isinstance(command, str) or tuple(command.split()) not in self.allowed_commands:
+            allowed = self.allowed_commands + ((("python", "-m", "pytest"),) if self._allow_tests else ())
+            if not isinstance(command, str) or tuple(command.split()) not in allowed:
                 return False, "Command blocked; allowed: python --version, git --version"
         return True, None
 

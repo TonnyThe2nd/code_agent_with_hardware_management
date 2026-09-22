@@ -21,6 +21,7 @@ class RunAgentSessionUseCase:
     def __init__(
         self, llm: LLMProvider, tools: ToolExecutor, workspace: Path,
         max_iterations: int = 10,
+        allow_tests: bool = False,
     ) -> None:
         if not isinstance(workspace, Path):
             raise ValueError("Workspace must be a Path")
@@ -32,6 +33,7 @@ class RunAgentSessionUseCase:
         if not self._workspace.is_dir():
             raise ValueError("Workspace must be a directory")
         self._max_iterations = max_iterations
+        self._allow_tests = allow_tests
 
     def execute(
         self, user_prompt: str, on_message: Callable[[Message], None] | None = None,
@@ -43,10 +45,11 @@ class RunAgentSessionUseCase:
             raise ValueError("on_message must be callable")
         session = AgentSession(messages=[
             Message(MessageRole.SYSTEM, DEFAULT_SYSTEM_PROMPT +
+                    (" You may also run python -m pytest in an isolated container." if self._allow_tests else "") +
                     f"\nWorkspace: {self._workspace}"),
             Message(MessageRole.USER, user_prompt),
         ])
-        loop = AgentLoop(self._llm, self._tools, SafetyPolicy())
+        loop = AgentLoop(self._llm, self._tools, SafetyPolicy(allow_tests=self._allow_tests))
         iterations = 0
         while iterations < self._max_iterations and not session.is_done():
             previous_count = len(session.messages)

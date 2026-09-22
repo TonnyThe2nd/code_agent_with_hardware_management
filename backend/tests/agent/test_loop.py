@@ -36,11 +36,11 @@ def test_cli_defaults_and_rich_output(monkeypatch: Any) -> None:
         def execute(self, call: ToolCall) -> ToolResult:
             return ToolResult(call.id, call.name, "x" * 250)
 
-    def registry_factory(workspace: Path) -> Registry:
+    def registry_factory(workspace: Path, **kwargs: Any) -> Registry:
         configured["workspace"] = workspace
         return Registry()
 
-    def provider_factory(model: str, tools_schema: list[dict[str, Any]]) -> FakeLLM:
+    def provider_factory(model: str, tools_schema: list[dict[str, Any]], **kwargs: Any) -> FakeLLM:
         configured["model"] = model
         configured["schemas"] = tools_schema
         return FakeLLM([
@@ -53,9 +53,17 @@ def test_cli_defaults_and_rich_output(monkeypatch: Any) -> None:
     monkeypatch.setattr(cli, "Console", FakeConsole)
     monkeypatch.setattr(cli, "build_default_registry", registry_factory)
     monkeypatch.setattr(cli, "OllamaProvider", provider_factory)
+    class Catalog:
+        def __init__(self, base_url: str) -> None:
+            pass
+
+        def select(self, requested: str | None) -> str:
+            return requested or "installed:7b"
+
+    monkeypatch.setattr(cli, "OllamaCatalog", Catalog)
     result = CliRunner().invoke(app, ["agent", "run", "Read file"])
     assert result.exit_code == 0, result.output
-    assert configured["model"] == "qwen2.5-coder:7b"
+    assert configured["model"] == "installed:7b"
     assert configured["workspace"] == Path.cwd().resolve()
     assert configured["schemas"][0]["function"]["name"] == "read_file"
     assert [options["style"] for _, options in printed] == ["cyan", "yellow", "dim", "cyan", "green"]
@@ -256,14 +264,14 @@ def test_command_contract_and_truncation(tmp_path: Path, monkeypatch: Any) -> No
     subdirectory.mkdir()
 
     def fake_run(command: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        assert command == "echo test"
-        assert kwargs["shell"] is True
+        assert command[-1] == "--version"
+        assert kwargs["shell"] is False
         assert kwargs["cwd"] == subdirectory.resolve()
         assert kwargs["timeout"] == 10
         return subprocess.CompletedProcess(command, 0, "x" * 12_000, "stderr")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    assert run_command(tmp_path)("echo test", cwd="sub") == "x" * 10_000
+    assert run_command(tmp_path)("python --version", cwd="sub") == "x" * 10_000
 
 
 def test_registry_reports_timeout(tmp_path: Path, monkeypatch: Any) -> None:
@@ -271,7 +279,7 @@ def test_registry_reports_timeout(tmp_path: Path, monkeypatch: Any) -> None:
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "echo test"),)))
+    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "python --version"),)))
     assert result.is_error and "timed out" in result.content
 
 
@@ -331,6 +339,6 @@ def test_registry_reports_exit_code(tmp_path: Path, monkeypatch: Any) -> None:
         return subprocess.CompletedProcess(command, 2, "", "error" * 3_000)
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "echo test"),)))
+    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "python --version"),)))
     assert result.is_error and result.content.startswith("Exit code 2:")
     assert len(result.content) == 10_000

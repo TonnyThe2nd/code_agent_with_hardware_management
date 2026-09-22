@@ -8,8 +8,8 @@ from ..infrastructure.composite_probe import CompositeProbe
 app = typer.Typer(help="Comandos do agente local")
 
 
-@app.command("hardware")
-def mostrar_hardware(json_output: bool = typer.Option(False, "--json")):
+@app.callback(invoke_without_command=True)
+def mostrar_hardware(json_output: bool = typer.Option(False, "--json")) -> None:
     """detecta e exibe o hardware da máquina."""
     probe = CompositeProbe()
     use_case = DetectHardwareUseCase(probe=probe)
