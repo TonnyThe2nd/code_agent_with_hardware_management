@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import httpx
 import typer
 
 from ..application.use_cases import RunAgentSessionUseCase
@@ -21,11 +20,10 @@ def run(
 ) -> None:
     try:
         registry = build_default_registry(workspace)
-        with httpx.Client(base_url=base_url, timeout=120.0) as client:
-            provider = OllamaProvider(client, model, registry.schemas())
-            use_case = RunAgentSessionUseCase(provider, registry, workspace, max_iterations)
-            result = use_case.execute(prompt)
-    except (httpx.HTTPError, ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
+        provider = OllamaProvider(model, base_url, registry.schemas())
+        use_case = RunAgentSessionUseCase(provider, registry, workspace, max_iterations)
+        result = use_case.execute(prompt)
+    except Exception as exc:
         typer.echo(f"Erro ao executar agente: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     if result.final_message is None:

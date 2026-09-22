@@ -9,25 +9,35 @@ from ...domain.value_objects import Message, MessageRole, ToolCall
 
 class OllamaProvider:
     def __init__(
-        self, client: httpx.Client, model: str,
-        schemas: list[dict[str, Any]] | None = None,
+        self, model: str, base_url: str = "http://localhost:11434",
+        tools_schema: list[dict[str, Any]] | None = None, timeout: float = 120.0,
     ) -> None:
-        if not model.strip():
+        if not isinstance(model, str) or not model.strip():
             raise ValueError("Model must not be empty")
-        self._client = client
+        if not isinstance(base_url, str) or not base_url.strip():
+            raise ValueError("Base URL must not be empty")
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout < float("inf"):
+            raise ValueError("Timeout must be positive and finite")
         self._model = model
-        self._schemas: list[dict[str, Any]] = json.loads(json.dumps(schemas or []))
+        self._base_url = base_url.rstrip("/")
+        self._tools_schema: list[dict[str, Any]] = json.loads(json.dumps(tools_schema or []))
+        self._timeout = timeout
 
-    def complete(self, messages: tuple[Message, ...]) -> Message:
-        response = self._client.post("/api/chat", json={
-            "model": self._model, "stream": False,
-            "messages": [self._serialize(message) for message in messages],
-            "tools": self._schemas,
-        })
+    def chat(self, messages: list[Message]) -> Message:
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": [message.to_dict() for message in messages],
+            "stream": False,
+        }
+        if self._tools_schema:
+            payload["tools"] = self._tools_schema
+        response = httpx.post(
+            f"{self._base_url}/api/chat", json=payload, timeout=self._timeout,
+        )
         response.raise_for_status()
         raw = response.json()["message"]
-        if raw.get("role") != "assistant":
-            raise ValueError("Unexpected Ollama message role")
+        if not isinstance(raw, dict):
+            raise ValueError("Ollama message must be an object")
         calls: list[ToolCall] = []
         for item in raw.get("tool_calls") or []:
             function = item["function"]
@@ -36,20 +46,13 @@ class OllamaProvider:
                 arguments = json.loads(arguments)
             if not isinstance(arguments, dict):
                 raise ValueError("Tool arguments must be an object")
-            calls.append(ToolCall(item.get("id") or str(uuid4()), function["name"],
-                                  tuple(arguments.items())))
-        return Message(MessageRole.ASSISTANT, raw.get("content") or "", tuple(calls))
+            calls.append(ToolCall(
+                id=item.get("id") or str(uuid4()),
+                name=function["name"], arguments=arguments,
+            ))
+        content = raw.get("content")
+        return Message(MessageRole.ASSISTANT, "" if content is None else content, tuple(calls))
 
-    @staticmethod
-    def _serialize(message: Message) -> dict[str, Any]:
-        data: dict[str, Any] = {"role": message.role.value, "content": message.content}
-        if message.tool_calls:
-            data["tool_calls"] = [
-                {"id": call.id, "type": "function", "function": {
-                    "name": call.name, "arguments": dict(call.arguments),
-                }} for call in message.tool_calls
-            ]
-        if message.role is MessageRole.TOOL:
-            data["tool_name"] = message.name
-            data["tool_call_id"] = message.tool_call_id
-        return data
+    def complete(self, messages: tuple[Message, ...]) -> Message:
+        """Adapt chat to the domain's existing LLMProvider contract."""
+        return self.chat(list(messages))

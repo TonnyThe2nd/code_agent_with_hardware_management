@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class MessageRole(str, Enum):
@@ -27,13 +28,15 @@ class FilePath:
 class ToolCall:
     id: str
     name: str
-    arguments: tuple[tuple[str, str | int], ...] = ()
+    arguments: tuple[tuple[str, str | int], ...] | dict[str, str | int] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
             raise ValueError("Tool call requires an id")
         if not isinstance(self.name, str) or not self.name.strip():
             raise ValueError("Tool call requires a name")
+        if isinstance(self.arguments, dict):
+            object.__setattr__(self, "arguments", tuple(self.arguments.items()))
         if not isinstance(self.arguments, tuple) or any(
             not isinstance(pair, tuple) or len(pair) != 2
             or not isinstance(pair[0], str)
@@ -90,3 +93,16 @@ class Message:
                 raise ValueError("Tool messages require a name")
         elif self.tool_call_id is not None or self.name is not None:
             raise ValueError("Only tool messages may identify a tool result")
+
+    def to_dict(self) -> dict[str, Any]:
+        data: dict[str, Any] = {"role": self.role.value, "content": self.content}
+        if self.tool_calls:
+            data["tool_calls"] = [
+                {"id": call.id, "type": "function", "function": {
+                    "name": call.name, "arguments": dict(call.arguments),
+                }} for call in self.tool_calls
+            ]
+        if self.role is MessageRole.TOOL:
+            data["tool_name"] = self.name
+            data["tool_call_id"] = self.tool_call_id
+        return data

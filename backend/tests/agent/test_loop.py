@@ -1,4 +1,5 @@
 import json
+from src.agent.infrastructure.llm import ollama_provider
 import subprocess
 from typing import Any
 
@@ -215,6 +216,57 @@ def test_registry_reports_timeout(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(subprocess, "run", fake_run)
     result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "echo test"),)))
     assert result.is_error and "timed out" in result.content
+
+
+def test_ollama_chat_payload_and_parsing(monkeypatch: Any) -> None:
+    schemas = [{"type": "function", "function": {"name": "read_file"}}]
+    messages = [Message(MessageRole.USER, "Read file")]
+
+    def post(url: str, **kwargs: Any) -> Any:
+        assert url == "http://localhost:11434/api/chat"
+        assert kwargs["timeout"] == 3.0
+        assert kwargs["json"] == {
+            "model": "fake", "messages": [message.to_dict() for message in messages],
+            "stream": False, "tools": schemas,
+        }
+        return ollama_provider.httpx.Response(200, request=ollama_provider.httpx.Request("POST", url), json={
+            "message": {"content": None, "tool_calls": [
+                {"id": "known", "function": {"name": "read_file", "arguments": {"path": "file", "max_bytes": 3}}},
+                {"function": {"name": "list_dir", "arguments": "{}"}},
+            ]},
+        })
+
+    monkeypatch.setattr(ollama_provider.httpx, "post", post)
+    result = ollama_provider.OllamaProvider("fake", "http://localhost:11434/", schemas, 3.0).chat(messages)
+    assert result.role is MessageRole.ASSISTANT and result.content == ""
+    assert result.tool_calls[0].id == "known"
+    assert dict(result.tool_calls[0].arguments) == {"path": "file", "max_bytes": 3}
+    assert result.tool_calls[1].id and dict(result.tool_calls[1].arguments) == {}
+    assert result.to_dict()["tool_calls"][0]["function"]["arguments"]["max_bytes"] == 3
+
+
+def test_ollama_omits_empty_tools_and_supports_complete(monkeypatch: Any) -> None:
+    def post(url: str, **kwargs: Any) -> Any:
+        assert "tools" not in kwargs["json"]
+        return ollama_provider.httpx.Response(200, request=ollama_provider.httpx.Request("POST", url),
+                                             json={"message": {"content": "Done"}})
+
+    monkeypatch.setattr(ollama_provider.httpx, "post", post)
+    assert ollama_provider.OllamaProvider("fake").complete(()).content == "Done"
+
+
+def test_ollama_propagates_http_status_errors(monkeypatch: Any) -> None:
+    for status in (302, 400, 500):
+        def post(url: str, **kwargs: Any) -> Any:
+            return ollama_provider.httpx.Response(status, request=ollama_provider.httpx.Request("POST", url))
+
+        monkeypatch.setattr(ollama_provider.httpx, "post", post)
+        try:
+            ollama_provider.OllamaProvider("fake").chat([])
+        except ollama_provider.httpx.HTTPStatusError as exc:
+            assert exc.response.status_code == status
+        else:
+            raise AssertionError("HTTP failure was swallowed")
 
 
 def test_registry_reports_exit_code(tmp_path: Path, monkeypatch: Any) -> None:
