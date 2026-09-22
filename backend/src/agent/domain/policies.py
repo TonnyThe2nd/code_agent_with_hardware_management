@@ -2,24 +2,35 @@ from .value_objects import FilePath, ToolCall
 
 
 class SafetyPolicy:
-    """A closed command vocabulary avoids relying on shell blacklists."""
 
     allowed_commands: tuple[tuple[str, ...], ...] = (
         ("python", "--version"), ("git", "--version"),
     )
 
-    def validate(self, call: ToolCall) -> None:
+    def is_allowed(self, call: ToolCall) -> tuple[bool, str | None]:
+        if not isinstance(call, ToolCall):
+            return False, "Invalid tool call"
         arguments = dict(call.arguments)
-        expected = {
+        expected: dict[str, set[str]] = {
             "read_file": {"path"}, "write_file": {"path", "content"},
             "list_dir": {"path"}, "run_command": {"command"},
         }
         if call.name not in expected:
-            raise ValueError("Unknown tool: " + call.name)
+            return False, "Unknown tool: " + call.name
         if set(arguments) != expected[call.name]:
-            raise ValueError("Invalid tool arguments")
+            return False, "Invalid tool arguments"
         if "path" in arguments:
-            FilePath(arguments["path"])
+            try:
+                FilePath(arguments["path"])
+            except ValueError as exc:
+                return False, str(exc)
         if call.name == "run_command":
             if tuple(arguments["command"].split()) not in self.allowed_commands:
-                raise ValueError("Command blocked; allowed: python --version, git --version")
+                return False, "Command blocked; allowed: python --version, git --version"
+        return True, None
+
+    def validate(self, call: ToolCall) -> None:
+        """Preserve the exception-based contract used by existing adapters."""
+        allowed, reason = self.is_allowed(call)
+        if not allowed:
+            raise ValueError(reason)

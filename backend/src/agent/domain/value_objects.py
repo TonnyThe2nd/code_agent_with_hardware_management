@@ -41,6 +41,8 @@ class ToolCall:
         ):
             raise ValueError("Arguments must be immutable string pairs")
         keys = [key for key, _ in self.arguments]
+        if any(not key.strip() for key in keys):
+            raise ValueError("Argument names must not be empty")
         if len(keys) != len(set(keys)):
             raise ValueError("Duplicate argument names")
 
@@ -53,8 +55,10 @@ class ToolResult:
     is_error: bool = False
 
     def __post_init__(self) -> None:
-        if not self.tool_call_id.strip() or not self.name.strip():
-            raise ValueError("Tool result requires call id and name")
+        if not isinstance(self.tool_call_id, str) or not self.tool_call_id.strip():
+            raise ValueError("Tool result requires a call id")
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise ValueError("Tool result requires a name")
         if not isinstance(self.content, str) or not isinstance(self.is_error, bool):
             raise ValueError("Invalid tool result")
 
@@ -79,7 +83,9 @@ class Message:
         if len({call.id for call in self.tool_calls}) != len(self.tool_calls):
             raise ValueError("Duplicate tool call ids")
         if self.role is MessageRole.TOOL:
-            if not self.tool_call_id or not self.name:
-                raise ValueError("Tool messages require call id and name")
+            if not isinstance(self.tool_call_id, str) or not self.tool_call_id.strip():
+                raise ValueError("Tool messages require a call id")
+            if not isinstance(self.name, str) or not self.name.strip():
+                raise ValueError("Tool messages require a name")
         elif self.tool_call_id is not None or self.name is not None:
             raise ValueError("Only tool messages may identify a tool result")
