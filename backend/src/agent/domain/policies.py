@@ -13,19 +13,35 @@ class SafetyPolicy:
         arguments = dict(call.arguments)
         expected: dict[str, set[str]] = {
             "read_file": {"path"}, "write_file": {"path", "content"},
-            "list_dir": {"path"}, "run_command": {"command"},
+            "list_dir": set(), "run_command": {"command"},
+        }
+        optional: dict[str, set[str]] = {
+            "read_file": {"max_bytes"}, "write_file": set(),
+            "list_dir": {"path"}, "run_command": {"cwd"},
         }
         if call.name not in expected:
             return False, "Unknown tool: " + call.name
-        if set(arguments) != expected[call.name]:
+        if not expected[call.name] <= set(arguments) or set(arguments) - expected[call.name] - optional[call.name]:
             return False, "Invalid tool arguments"
-        if "path" in arguments:
+        if any(not isinstance(value, str) for key, value in arguments.items() if key != "max_bytes"):
+            return False, "Tool arguments must be strings except max_bytes"
+        if "max_bytes" in arguments:
+            limit = arguments["max_bytes"]
+            if type(limit) is not int or limit < 1:
+                return False, "max_bytes must be a positive integer"
+        for key in ("path", "cwd"):
+            if key not in arguments:
+                continue
             try:
-                FilePath(arguments["path"])
+                value = arguments[key]
+                if not isinstance(value, str):
+                    return False, "Path must be a string"
+                FilePath(value)
             except ValueError as exc:
                 return False, str(exc)
         if call.name == "run_command":
-            if tuple(arguments["command"].split()) not in self.allowed_commands:
+            command = arguments["command"]
+            if not isinstance(command, str) or tuple(command.split()) not in self.allowed_commands:
                 return False, "Command blocked; allowed: python --version, git --version"
         return True, None
 

@@ -27,7 +27,7 @@ class FilePath:
 class ToolCall:
     id: str
     name: str
-    arguments: tuple[tuple[str, str], ...] = ()
+    arguments: tuple[tuple[str, str | int], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -36,10 +36,11 @@ class ToolCall:
             raise ValueError("Tool call requires a name")
         if not isinstance(self.arguments, tuple) or any(
             not isinstance(pair, tuple) or len(pair) != 2
-            or not all(isinstance(item, str) for item in pair)
+            or not isinstance(pair[0], str)
+            or type(pair[1]) not in (str, int)
             for pair in self.arguments
         ):
-            raise ValueError("Arguments must be immutable string pairs")
+            raise ValueError("Arguments require string keys and immutable string or integer values")
         keys = [key for key, _ in self.arguments]
         if any(not key.strip() for key in keys):
             raise ValueError("Argument names must not be empty")

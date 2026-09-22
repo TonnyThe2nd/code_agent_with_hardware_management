@@ -1,46 +1,54 @@
+import json
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Callable
 
-from ...domain.policies import SafetyPolicy
-from ...domain.value_objects import FilePath, ToolCall, ToolResult
-
-
-class WorkspaceTool(Protocol):
-    def execute(self, arguments: dict[str, str]) -> str: ...
+from ...domain.value_objects import ToolCall, ToolResult
 
 
 def resolve_workspace_path(workspace: Path, value: str) -> Path:
-    FilePath(value)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Path must not be empty")
     relative = Path(value.replace("\\", "/"))
-    if any(Path(part).is_reserved() or part.endswith((" ", "."))
-           for part in relative.parts if part != "."):
-        raise ValueError("Reserved or ambiguous path")
+    if any(ord(char) < 32 for char in value):
+        raise PermissionError("Control characters are forbidden in paths")
+    if any(Path(part).is_reserved() or ":" in part or part.endswith((" ", "."))
+           for part in relative.parts if part not in (".", "..", relative.anchor)):
+        raise PermissionError("Reserved or ambiguous path")
     root = workspace.resolve(strict=True)
+    if not root.is_dir():
+        raise NotADirectoryError(str(root))
     target = (root / relative).resolve()
     if not target.is_relative_to(root):
-        raise ValueError("Path escapes workspace")
+        raise PermissionError("Path escapes workspace")
     return target
 
 
 class ToolRegistry:
-    def __init__(self, tools: dict[str, WorkspaceTool], policy: SafetyPolicy) -> None:
-        self._tools = dict(tools)
-        self._policy = policy
+    def __init__(self) -> None:
+        self._tools: dict[str, Callable[..., str]] = {}
+        self._schemas: dict[str, dict[str, Any]] = {}
+
+    def register(self, name: str, fn: Callable[..., str], schema: dict[str, Any]) -> None:
+        if not name.strip() or not callable(fn):
+            raise ValueError("A tool requires a name and callable")
+        if name in self._tools:
+            raise ValueError("Tool already registered: " + name)
+        if schema.get("type") != "function" or schema.get("function", {}).get("name") != name:
+            raise ValueError("Schema must describe the registered function")
+        copied = json.loads(json.dumps(schema))
+        self._tools[name] = fn
+        self._schemas[name] = copied
+
+    def schemas(self) -> list[dict[str, Any]]:
+        return json.loads(json.dumps(list(self._schemas.values())))
 
     def execute(self, call: ToolCall) -> ToolResult:
         try:
-            self._policy.validate(call)
             if call.name not in self._tools:
-                raise ValueError("Tool is not registered: " + call.name)
-            content = self._tools[call.name].execute(dict(call.arguments))
+                raise ValueError("Unknown tool: " + call.name)
+            content = self._tools[call.name](**dict(call.arguments))
+            if not isinstance(content, str):
+                raise TypeError("Tool must return text")
             return ToolResult(call.id, call.name, content)
-        except (ValueError, OSError, RuntimeError) as exc:
-            return ToolResult(call.id, call.name, str(exc), is_error=True)
-
-
-def build_default_registry(
-    read_file: WorkspaceTool, write_file: WorkspaceTool,
-    list_dir: WorkspaceTool, run_command: WorkspaceTool, policy: SafetyPolicy,
-) -> ToolRegistry:
-    return ToolRegistry({"read_file": read_file, "write_file": write_file,
-                         "list_dir": list_dir, "run_command": run_command}, policy)
+        except Exception as exc:
+            return ToolResult(call.id, call.name, str(exc)[:10_000], is_error=True)

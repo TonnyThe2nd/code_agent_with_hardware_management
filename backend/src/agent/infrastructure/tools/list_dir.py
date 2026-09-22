@@ -1,20 +1,39 @@
 import json
 from pathlib import Path
+from typing import Any, Protocol
 
 from .registry import resolve_workspace_path
 
 
-class ListDir:
-    def __init__(self, workspace: Path) -> None:
-        self._workspace = workspace.resolve(strict=True)
+SCHEMA: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "list_dir", "description": "List entries inside a workspace directory.",
+        "parameters": {
+            "type": "object",
+            "properties": {"path": {"type": "string", "default": "."}},
+            "required": [], "additionalProperties": False,
+        },
+    },
+}
 
-    def execute(self, arguments: dict[str, str]) -> str:
-        path = resolve_workspace_path(self._workspace, arguments["path"])
+
+class ListDirFunction(Protocol):
+    def __call__(self, path: str = ".") -> str: ...
+
+
+def list_dir(workspace: Path) -> ListDirFunction:
+    root = resolve_workspace_path(workspace, ".")
+
+    def execute(path: str = ".") -> str:
+        target = resolve_workspace_path(root, path)
         entries: list[str] = []
-        for child in sorted(path.iterdir()):
+        for child in sorted(target.iterdir()):
             try:
-                resolve_workspace_path(self._workspace, str(child.relative_to(self._workspace)))
-            except ValueError:
+                resolved = resolve_workspace_path(root, str(child))
+            except PermissionError:
                 continue
-            entries.append(child.name + ("/" if child.is_dir() else ""))
+            entries.append(child.name + ("/" if resolved.is_dir() else ""))
         return json.dumps(entries, ensure_ascii=False)
+
+    return execute

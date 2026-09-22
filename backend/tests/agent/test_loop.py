@@ -1,3 +1,12 @@
+import json
+import subprocess
+from typing import Any
+
+from src.agent.infrastructure.tools import build_default_registry
+from src.agent.infrastructure.tools.read_file import read_file
+from src.agent.infrastructure.tools.write_file import write_file
+from src.agent.infrastructure.tools.list_dir import list_dir
+from src.agent.infrastructure.tools.run_command import run_command
 from src.agent.domain.entities import AgentSession
 from src.agent.domain.policies import SafetyPolicy
 from src.agent.domain.services import AgentLoop
@@ -146,3 +155,73 @@ def test_use_case_rejects_blank_prompt_before_calling_llm() -> None:
 from pathlib import Path
 
 from src.agent.application.use_cases import DEFAULT_SYSTEM_PROMPT, RunAgentSessionUseCase
+
+
+def test_tool_factories_and_registry(tmp_path: Path) -> None:
+    registry = build_default_registry(tmp_path)
+    result = registry.execute(ToolCall("1", "write_file", (("path", "nested/file.txt"), ("content", "abcdef"))))
+    assert not result.is_error
+    result = registry.execute(ToolCall("2", "read_file", (("path", "nested/file.txt"), ("max_bytes", 3))))
+    assert result.content == "abc"
+    assert json.loads(registry.execute(ToolCall("3", "list_dir")).content) == ["nested/"]
+    assert registry.execute(ToolCall("4", "unknown")).is_error
+    assert registry.execute(ToolCall("5", "read_file")).is_error
+    schemas = registry.schemas()
+    assert len(schemas) == 4
+    schemas[0]["function"]["name"] = "changed"
+    assert registry.schemas()[0]["function"]["name"] != "changed"
+    assert SafetyPolicy().is_allowed(ToolCall("6", "read_file", (("path", "file"), ("max_bytes", 3)))) == (True, None)
+
+
+def test_factories_reject_external_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    for path in ("../outside", "..\\outside", str(tmp_path / "outside")):
+        operations = (
+            lambda: read_file(workspace)(path),
+            lambda: write_file(workspace)(path, "blocked"),
+            lambda: list_dir(workspace)(path),
+            lambda: run_command(workspace)("echo blocked", cwd=path),
+        )
+        for operation in operations:
+            try:
+                operation()
+            except PermissionError:
+                pass
+            else:
+                raise AssertionError("External path accepted")
+    assert not (tmp_path / "outside").exists()
+
+
+def test_command_contract_and_truncation(tmp_path: Path, monkeypatch: Any) -> None:
+    subdirectory = tmp_path / "sub"
+    subdirectory.mkdir()
+
+    def fake_run(command: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert command == "echo test"
+        assert kwargs["shell"] is True
+        assert kwargs["cwd"] == subdirectory.resolve()
+        assert kwargs["timeout"] == 10
+        return subprocess.CompletedProcess(command, 0, "x" * 12_000, "stderr")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert run_command(tmp_path)("echo test", cwd="sub") == "x" * 10_000
+
+
+def test_registry_reports_timeout(tmp_path: Path, monkeypatch: Any) -> None:
+    def fake_run(command: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "echo test"),)))
+    assert result.is_error and "timed out" in result.content
+
+
+def test_registry_reports_exit_code(tmp_path: Path, monkeypatch: Any) -> None:
+    def fake_run(command: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 2, "", "error" * 3_000)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = build_default_registry(tmp_path).execute(ToolCall("1", "run_command", (("command", "echo test"),)))
+    assert result.is_error and result.content.startswith("Exit code 2:")
+    assert len(result.content) == 10_000

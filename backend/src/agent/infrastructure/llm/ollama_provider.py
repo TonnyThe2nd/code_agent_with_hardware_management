@@ -8,17 +8,21 @@ from ...domain.value_objects import Message, MessageRole, ToolCall
 
 
 class OllamaProvider:
-    def __init__(self, client: httpx.Client, model: str) -> None:
+    def __init__(
+        self, client: httpx.Client, model: str,
+        schemas: list[dict[str, Any]] | None = None,
+    ) -> None:
         if not model.strip():
             raise ValueError("Model must not be empty")
         self._client = client
         self._model = model
+        self._schemas: list[dict[str, Any]] = json.loads(json.dumps(schemas or []))
 
     def complete(self, messages: tuple[Message, ...]) -> Message:
         response = self._client.post("/api/chat", json={
             "model": self._model, "stream": False,
             "messages": [self._serialize(message) for message in messages],
-            "tools": self._tool_schemas(),
+            "tools": self._schemas,
         })
         response.raise_for_status()
         raw = response.json()["message"]
@@ -49,18 +53,3 @@ class OllamaProvider:
             data["tool_name"] = message.name
             data["tool_call_id"] = message.tool_call_id
         return data
-
-    @staticmethod
-    def _tool_schemas() -> list[dict[str, Any]]:
-        definitions = (
-            ("read_file", "Read a UTF-8 workspace file", ("path",)),
-            ("write_file", "Write a UTF-8 workspace file", ("path", "content")),
-            ("list_dir", "List a workspace directory; use . for root", ("path",)),
-            ("run_command", "Run python --version or git --version if configured", ("command",)),
-        )
-        return [{"type": "function", "function": {
-            "name": name, "description": description,
-            "parameters": {"type": "object", "properties": {
-                key: {"type": "string"} for key in keys
-            }, "required": list(keys), "additionalProperties": False},
-        }} for name, description, keys in definitions]
