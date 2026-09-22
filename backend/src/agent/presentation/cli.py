@@ -5,7 +5,6 @@ import typer
 
 from ..application.use_cases import RunAgentSessionUseCase
 from ..domain.policies import SafetyPolicy
-from ..domain.services import AgentLoop
 from ..infrastructure.llm.ollama_provider import OllamaProvider
 from ..infrastructure.tools.list_dir import ListDir
 from ..infrastructure.tools.read_file import ReadFile
@@ -38,12 +37,12 @@ def run(
         )
         with httpx.Client(base_url=base_url, timeout=120.0) as client:
             provider = OllamaProvider(client, model)
-            use_case = RunAgentSessionUseCase(AgentLoop(provider, registry, policy))
-            result = use_case.execute(prompt, max_iterations)
+            use_case = RunAgentSessionUseCase(provider, registry, workspace, max_iterations)
+            result = use_case.execute(prompt)
     except (httpx.HTTPError, ValueError, OSError, RuntimeError, KeyError, TypeError) as exc:
         typer.echo(f"Erro ao executar agente: {exc}", err=True)
         raise typer.Exit(code=1) from exc
-    typer.echo(result.response)
-    if not result.completed:
+    if result.final_message is None:
         typer.echo("Limite de iteracoes atingido sem resposta final.", err=True)
         raise typer.Exit(code=2)
+    typer.echo(result.final_message)

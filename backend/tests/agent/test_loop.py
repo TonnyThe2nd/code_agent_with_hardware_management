@@ -79,3 +79,70 @@ def test_policy_blocks_dangerous_commands_and_unknown_tools() -> None:
             pass
         else:
             raise AssertionError(f"Unsafe call accepted: {call}")
+
+
+def test_use_case_returns_dto_and_notifies_between_iterations() -> None:
+    call = ToolCall("1", "read_file", (("path", "hello.txt"),))
+    llm = FakeLLM([
+        Message(MessageRole.ASSISTANT, tool_calls=(call,)),
+        Message(MessageRole.ASSISTANT, "Done"),
+    ])
+    notifications: list[tuple[int, Message]] = []
+
+    def on_message(message: Message) -> None:
+        notifications.append((len(llm.histories), message))
+
+    workspace = Path.cwd()
+    result = RunAgentSessionUseCase(llm, FakeTools(), workspace, 3).execute(
+        "Read hello.txt", on_message,
+    )
+    assert result.to_dict() == {
+        "session_id": result.session_id,
+        "final_message": "Done",
+        "iterations": 2,
+        "messages_count": 5,
+    }
+    assert result.session_id
+    assert [count for count, _ in notifications] == [1, 1, 2]
+    assert [message.role for _, message in notifications] == [
+        MessageRole.ASSISTANT, MessageRole.TOOL, MessageRole.ASSISTANT,
+    ]
+    assert llm.histories[0][0].content.startswith(DEFAULT_SYSTEM_PROMPT)
+    assert str(workspace.resolve()) in llm.histories[0][0].content
+    assert llm.histories[0][1] == Message(MessageRole.USER, "Read hello.txt")
+
+
+def test_use_case_reports_iteration_exhaustion() -> None:
+    call = ToolCall("1", "list_dir", (("path", "."),))
+    llm = FakeLLM([Message(MessageRole.ASSISTANT, "Checking", tool_calls=(call,))])
+    result = RunAgentSessionUseCase(llm, FakeTools(), Path.cwd(), 1).execute("List files")
+    assert result.final_message is None
+    assert result.iterations == 1
+    assert result.messages_count == 4
+
+
+def test_use_case_creates_a_fresh_session_for_each_run() -> None:
+    llm = FakeLLM([Message(MessageRole.ASSISTANT, ""), Message(MessageRole.ASSISTANT, "Done")])
+    use_case = RunAgentSessionUseCase(llm, FakeTools(), Path.cwd())
+    first = use_case.execute("First")
+    second = use_case.execute("Second")
+    assert first.session_id != second.session_id
+    assert first.final_message == ""
+    assert first.iterations == second.iterations == 1
+    assert first.messages_count == second.messages_count == 3
+    assert llm.histories[1][1].content == "Second"
+
+
+def test_use_case_rejects_blank_prompt_before_calling_llm() -> None:
+    llm = FakeLLM([])
+    use_case = RunAgentSessionUseCase(llm, FakeTools(), Path.cwd())
+    try:
+        use_case.execute("  ")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Blank prompt accepted")
+    assert llm.histories == []
+from pathlib import Path
+
+from src.agent.application.use_cases import DEFAULT_SYSTEM_PROMPT, RunAgentSessionUseCase
