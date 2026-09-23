@@ -2,6 +2,18 @@
 
 ## Planejamento em camadas
 
+A execução de subtarefas usa `--action-mode structured` por padrão. O Ollama
+recebe um JSON Schema em `format`, e cada resposta deve ser uma ação conhecida
+com argumentos válidos ou `{"action":"final","content":"..."}`. A validação
+exige uma ação antes de liberar resposta final; se há ferramentas de leitura,
+a primeira ação fica restrita a `read_file` ou `list_dir`. Isso comprova uma
+interação com o workspace, não que toda a implementação foi feita. A validação
+local rejeita texto em volta, ferramentas desconhecidas e argumentos de tipos
+incorretos. As ações passam pela mesma SafetyPolicy e ToolRegistry; não há eval
+nem execução de exemplos extraídos de texto. Use `--action-mode native` para
+voltar ao protocolo nativo de tool_calls. O planejador continua gerando seu
+JSON de subtarefas separadamente; `agent run` mantém seu protocolo nativo.
+
 Dentro de `backend`, execute:
 
 ```powershell
@@ -40,6 +52,12 @@ próximas subtarefas. Alterações anteriores não são revertidas automaticamen
 A conclusão de uma sessão é declarada pelo modelo; não comprova correção do código.
 No modo de execução do plano, respostas sem ferramentas reais recebem uma
 tentativa de correção. Persistindo a ausência de ações, o plano é interrompido.
+Se nenhuma ferramenta chegou a ser invocada, a execução tenta o próximo modelo
+maior do catálogo que esteja instalado, suporte tools e caiba no orçamento.
+Cada candidato é tentado no máximo uma vez por subtarefa, em ordem crescente de
+parâmetros. A CLI mostra a troca; o plano original continua mostrando a atribuição
+inicial. Falhas de ferramentas, HTTP e limite de iterações não acionam esse fallback,
+pois podem ter ocorrido efeitos no workspace. Sem candidato, a execução para.
 JSON de ferramenta no texto e patches de exemplo não são executados automaticamente.
 A CLI informa os caminhos escritos por `write_file`; escrever conteúdo idêntico
 não é contado como alteração. Essa lista registra escritas, não substitui um

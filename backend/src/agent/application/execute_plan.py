@@ -4,6 +4,7 @@ from typing import Callable, Protocol
 
 from ..domain.value_objects import Message
 from .dto import AgentRunResult, RoutingPlanDTO
+from .errors import NoToolActivityError
 
 
 class SessionRunner(Protocol):
@@ -22,8 +23,10 @@ class PlanExecutionResult:
 class ExecuteRoutingPlanUseCase:
     """One writer at a time; dependent work only starts after a successful session."""
 
-    def __init__(self, runner_factory: Callable[[str], SessionRunner]) -> None:
+    def __init__(self, runner_factory: Callable[[str], SessionRunner],
+                 fallback_model: Callable[[str], str | None] | None = None) -> None:
         self._runner_factory = runner_factory
+        self._fallback_model = fallback_model
 
     def execute(
         self, plan: RoutingPlanDTO,
@@ -52,9 +55,19 @@ class ExecuteRoutingPlanUseCase:
                 f"Dependency reports: {json.dumps(context, ensure_ascii=False)}"
             )
             try:
-                if on_subtask is not None:
-                    on_subtask(task.id, model)
-                result = self._runner_factory(model).execute(prompt, on_message=on_message)
+                attempted: set[str] = set()
+                while True:
+                    attempted.add(model)
+                    if on_subtask is not None:
+                        on_subtask(task.id, model)
+                    try:
+                        result = self._runner_factory(model).execute(prompt, on_message=on_message)
+                        break
+                    except NoToolActivityError:
+                        replacement = self._fallback_model(model) if self._fallback_model else None
+                        if replacement is None or replacement in attempted:
+                            raise
+                        model = replacement
                 results[task.id] = result
                 if result.final_message is None:
                     return PlanExecutionResult(plan.plan_id, False, results, task.id, "Iteration limit reached")

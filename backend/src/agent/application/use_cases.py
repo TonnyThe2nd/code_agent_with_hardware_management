@@ -12,6 +12,7 @@ from ..domain.ports import LLMProvider, ToolExecutor
 from ..domain.services import AgentLoop
 from ..domain.value_objects import Message, MessageRole
 from .dto import AgentRunResult
+from .errors import NoToolActivityError
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -73,7 +74,9 @@ class RunAgentSessionUseCase:
                 result for turn in session.turns for result in turn.results if not result.is_error
             ):
                 if correction_sent or iterations >= self._max_iterations:
-                    raise RuntimeError(
+                    error_type = (RuntimeError if any(turn.results for turn in session.turns)
+                                  else NoToolActivityError)
+                    raise error_type(
                         "O modelo respondeu sem executar ferramentas reais. "
                         "Texto, JSON e exemplos de patch nao comprovam execucao. "
                         "Use um executor mais capaz no catalogo."
@@ -81,9 +84,9 @@ class RunAgentSessionUseCase:
                 session.completed = False
                 session.messages.append(Message(MessageRole.USER,
                     "No tool was executed. Your previous text is not an action. "
-                    "Call a provided tool through native tool_calls now. Start with list_dir or read_file. "
+                    "Call a provided tool using the configured action protocol now. Start with list_dir or read_file. "
                     "Only read_file, write_file, list_dir and run_command exist; apply_patch does not. "
-                    "Use relative paths. Do not print tool-call JSON as your answer."))
+                    "Use relative paths. Do not describe hypothetical calls as a final answer."))
                 correction_sent = True
                 continue
             if on_message is not None:

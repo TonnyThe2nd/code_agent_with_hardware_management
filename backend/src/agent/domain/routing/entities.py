@@ -29,6 +29,14 @@ class ModelCatalog:
     def smallest(self) -> ModelSpec:
         return min(self.models, key=lambda model: (model.params_b, model.size_gb, model.name))
 
+    def next_larger(self, current: str, budget_gb: float, available: set[str]) -> ModelSpec | None:
+        previous = next((model for model in self.models if model.name == current), None)
+        if previous is None:
+            return None
+        candidates = [model for model in self.fits(budget_gb)
+                      if model.name in available and model.params_b > previous.params_b]
+        return min(candidates, key=lambda model: (model.params_b, model.size_gb, model.name), default=None)
+
 
 @dataclass
 class RoutingPlan:

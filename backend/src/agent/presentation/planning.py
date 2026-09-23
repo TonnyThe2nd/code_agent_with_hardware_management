@@ -39,6 +39,7 @@ def plan(
     max_iterations: int = typer.Option(10, "--max-iter", min=1),
     allow_tests: bool = typer.Option(False, "--allow-tests"),
     test_image: str = typer.Option("code-agent-tests:local", "--test-image"),
+    action_mode: str = typer.Option("structured", "--action-mode", help="structured ou native"),
 ) -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -48,6 +49,8 @@ def plan(
     try:
         if not task.strip():
             raise ValueError("Task must not be empty")
+        if action_mode not in ("structured", "native"):
+            raise ValueError("--action-mode deve ser structured ou native")
         catalog = load_catalog(catalog_path)
         hardware = DetectHardwareUseCase(CompositeProbe()).execute()
         planner = (catalog.largest_that_fits(hardware.budget_gb, ModelTier.PLANNER)
@@ -82,7 +85,7 @@ def plan(
 
         def runner(model: str) -> RunAgentSessionUseCase:
             llm = OllamaProvider(model, tools_schema=registry.schemas(), timeout=timeout,
-                                 num_ctx=4096, keep_alive=0)
+                                 num_ctx=4096, keep_alive=0, action_mode=action_mode)
             return RunAgentSessionUseCase(llm, registry, workspace, max_iterations,
                                          allow_tests=allow_tests, fail_on_tool_error=True,
                                          require_tool_activity=True)
@@ -97,7 +100,16 @@ def plan(
         def on_subtask(task_id: str, model: str) -> None:
             console.print(f"Executando {task_id} com {model}", style="yellow", markup=False)
 
-        execution = ExecuteRoutingPlanUseCase(runner).execute(result, on_message, on_subtask)
+        def fallback_model(current: str) -> str | None:
+            available = {name for name, info in installed.items() if "tools" in info.get("capabilities", [])}
+            replacement = catalog.next_larger(current, hardware.budget_gb, available)
+            if replacement is not None:
+                console.print(f"{current} nao executou ferramentas; tentando {replacement.name}.",
+                              style="yellow", markup=False)
+                return replacement.name
+            return None
+
+        execution = ExecuteRoutingPlanUseCase(runner, fallback_model).execute(result, on_message, on_subtask)
         if not execution.completed:
             console.print(f"Interrompido em {execution.failed_subtask}: {execution.error}. "
                           "Alteracoes anteriores permanecem no workspace.", style="red", markup=False)

@@ -5,6 +5,7 @@ from uuid import uuid4
 import httpx
 
 from ...domain.value_objects import Message, MessageRole, ToolCall
+from .structured_actions import StructuredActions
 
 
 class OllamaCatalog:
@@ -51,6 +52,7 @@ class OllamaProvider:
         tools_schema: list[dict[str, Any]] | None = None, timeout: float = 120.0,
         num_ctx: int | None = None,
         keep_alive: int | None = None,
+        action_mode: str = "native",
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("Model must not be empty")
@@ -66,6 +68,9 @@ class OllamaProvider:
             raise ValueError("num_ctx must be a positive integer")
         self._num_ctx = num_ctx
         self._keep_alive = keep_alive
+        if action_mode not in ("native", "structured"):
+            raise ValueError("Unknown action mode")
+        self._actions = StructuredActions(self._tools_schema) if action_mode == "structured" else None
 
     def chat(self, messages: list[Message]) -> Message:
         payload: dict[str, Any] = {
@@ -79,6 +84,13 @@ class OllamaProvider:
             payload["options"] = {"num_ctx": self._num_ctx}
         if self._keep_alive is not None:
             payload["keep_alive"] = self._keep_alive
+        if self._actions is not None:
+            payload.pop("tools", None)
+            payload["format"] = self._actions.schema(allow_final=any(
+                message.role is MessageRole.TOOL for message in messages
+            ))
+            payload["messages"] = self._actions.messages(messages)
+            payload.setdefault("options", {})["temperature"] = 0
         response = httpx.post(
             f"{self._base_url}/api/chat", json=payload, timeout=self._timeout,
         )
@@ -86,6 +98,8 @@ class OllamaProvider:
         raw = response.json()["message"]
         if not isinstance(raw, dict):
             raise ValueError("Ollama message must be an object")
+        if self._actions is not None:
+            return self._actions.parse(raw.get("content", ""))
         calls: list[ToolCall] = []
         for item in raw.get("tool_calls") or []:
             function = item["function"]
