@@ -25,6 +25,7 @@ def resolve_workspace_path(workspace: Path, value: str) -> Path:
 
 class ToolRegistry:
     def __init__(self) -> None:
+        self.changed_files: set[str] = set()
         self._tools: dict[str, Callable[..., str]] = {}
         self._schemas: dict[str, dict[str, Any]] = {}
 
@@ -47,6 +48,8 @@ class ToolRegistry:
             if call.name not in self._tools:
                 raise ValueError("Unknown tool: " + call.name)
             content = self._tools[call.name](**dict(call.arguments))
+            if call.name == "write_file" and isinstance(content, str) and content.startswith("Written: "):
+                self.changed_files.add(content[len("Written: "):])
             if not isinstance(content, str):
                 raise TypeError("Tool must return text")
             return ToolResult(call.id, call.name, content)

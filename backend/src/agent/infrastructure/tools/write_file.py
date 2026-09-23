@@ -30,7 +30,9 @@ def write_file(workspace: Path) -> WriteFileFunction:
             raise ValueError("Content must be text")
         target.parent.mkdir(parents=True, exist_ok=True)
         target = resolve_workspace_path(root, path)
-        target.write_text(content, encoding="utf-8")
+        if target.is_file() and target.read_bytes() == content.encode("utf-8"):
+            return "Unchanged: " + path
+        target.write_text(content, encoding="utf-8", newline="")
         return "Written: " + path
 
     return execute

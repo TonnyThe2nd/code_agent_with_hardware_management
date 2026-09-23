@@ -27,6 +27,8 @@ class RunAgentSessionUseCase:
         self, llm: LLMProvider, tools: ToolExecutor, workspace: Path,
         max_iterations: int = 10,
         allow_tests: bool = False,
+        fail_on_tool_error: bool = False,
+        require_tool_activity: bool = False,
     ) -> None:
         if not isinstance(workspace, Path):
             raise ValueError("Workspace must be a Path")
@@ -39,6 +41,8 @@ class RunAgentSessionUseCase:
             raise ValueError("Workspace must be a directory")
         self._max_iterations = max_iterations
         self._allow_tests = allow_tests
+        self._fail_on_tool_error = fail_on_tool_error
+        self._require_tool_activity = require_tool_activity
 
     def execute(
         self, user_prompt: str, on_message: Callable[[Message], None] | None = None,
@@ -56,10 +60,32 @@ class RunAgentSessionUseCase:
         ])
         loop = AgentLoop(self._llm, self._tools, SafetyPolicy(allow_tests=self._allow_tests))
         iterations = 0
+        correction_sent = False
         while iterations < self._max_iterations and not session.is_done():
             previous_count = len(session.messages)
             session, used_iterations = loop.run(session, max_iterations=1)
             iterations += used_iterations
+            if self._fail_on_tool_error:
+                errors = [result.content for result in session.turns[-1].results if result.is_error]
+                if errors:
+                    raise RuntimeError("Subtask tool failed: " + "; ".join(errors))
+            if self._require_tool_activity and session.is_done() and not any(
+                result for turn in session.turns for result in turn.results if not result.is_error
+            ):
+                if correction_sent or iterations >= self._max_iterations:
+                    raise RuntimeError(
+                        "O modelo respondeu sem executar ferramentas reais. "
+                        "Texto, JSON e exemplos de patch nao comprovam execucao. "
+                        "Use um executor mais capaz no catalogo."
+                    )
+                session.completed = False
+                session.messages.append(Message(MessageRole.USER,
+                    "No tool was executed. Your previous text is not an action. "
+                    "Call a provided tool through native tool_calls now. Start with list_dir or read_file. "
+                    "Only read_file, write_file, list_dir and run_command exist; apply_patch does not. "
+                    "Use relative paths. Do not print tool-call JSON as your answer."))
+                correction_sent = True
+                continue
             if on_message is not None:
                 for message in session.messages[previous_count:]:
                     on_message(message)

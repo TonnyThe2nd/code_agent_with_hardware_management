@@ -50,6 +50,7 @@ class OllamaProvider:
         self, model: str, base_url: str = "http://localhost:11434",
         tools_schema: list[dict[str, Any]] | None = None, timeout: float = 120.0,
         num_ctx: int | None = None,
+        keep_alive: int | None = None,
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("Model must not be empty")
@@ -64,6 +65,7 @@ class OllamaProvider:
         if num_ctx is not None and (type(num_ctx) is not int or num_ctx < 1):
             raise ValueError("num_ctx must be a positive integer")
         self._num_ctx = num_ctx
+        self._keep_alive = keep_alive
 
     def chat(self, messages: list[Message]) -> Message:
         payload: dict[str, Any] = {
@@ -75,6 +77,8 @@ class OllamaProvider:
             payload["tools"] = self._tools_schema
         if self._num_ctx is not None:
             payload["options"] = {"num_ctx": self._num_ctx}
+        if self._keep_alive is not None:
+            payload["keep_alive"] = self._keep_alive
         response = httpx.post(
             f"{self._base_url}/api/chat", json=payload, timeout=self._timeout,
         )

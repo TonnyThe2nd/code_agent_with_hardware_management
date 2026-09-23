@@ -22,9 +22,32 @@ Essa regra difere da estimativa conservadora de `agent run`; tamanho Q4 não
 garante memória suficiente para inferência. Os valores do YAML são estimativas.
 O LLM decompõe e classifica complexidade; a escolha de modelos é código puro.
 
-Esta etapa gera e apresenta o plano, dependências e avisos. Não executa subtarefas,
-não mantém dois modelos simultaneamente em memória e não oferece `--execute`.
-O workspace identifica o destino futuro; não é lido nem escrito pelo planejador.
+Sem `--execute`, gera apenas o plano. Para executar as subtarefas:
+
+```powershell
+python -m src.main agent plan "Implemente validacao de entrada e testes" --workspace . --execute --max-iter 10 --timeout 180
+```
+
+Todos os modelos atribuídos precisam estar instalados e declarar `tools` antes
+da primeira subtarefa. A execução usa as ferramentas reais, um modelo/subtarefa
+por vez, compartilhando o workspace e passando as respostas das dependências.
+O planejador não lê arquivos; cada executor recebe instruções para inspecioná-los.
+`keep_alive=0` solicita descarregamento após cada requisição, inclusive planejamento;
+isso pode tornar a execução mais lenta. Não descarrega modelos carregados por outros clientes.
+`--max-iter` vale por subtarefa. Falha HTTP, erro de ferramenta (verificado ao fim
+da iteração) ou limite atingido interrompe o plano com código 2, sem iniciar as
+próximas subtarefas. Alterações anteriores não são revertidas automaticamente.
+A conclusão de uma sessão é declarada pelo modelo; não comprova correção do código.
+No modo de execução do plano, respostas sem ferramentas reais recebem uma
+tentativa de correção. Persistindo a ausência de ações, o plano é interrompido.
+JSON de ferramenta no texto e patches de exemplo não são executados automaticamente.
+A CLI informa os caminhos escritos por `write_file`; escrever conteúdo idêntico
+não é contado como alteração. Essa lista registra escritas, não substitui um
+diff final (um arquivo pode ser escrito e depois restaurado durante a execução).
+Se nenhuma escrita ocorreu, a CLI informa explicitamente que não há alterações
+registradas, mesmo que as sessões de leitura tenham terminado.
+Use `--allow-tests` para habilitar pytest em Docker, com `--test-image` opcional.
+Sem essa opção, o agente não pode executar pytest. Revise o diff e os testes.
 Modelos atribuídos mas não instalados são apontados em amarelo. Um modelo de
 planejamento sem tools pode gerar JSON; isso não garante que possa executar
 futuramente as ferramentas do agente. Mais de dois modelos gera um aviso,
