@@ -61,7 +61,7 @@ def test_cli_defaults_and_rich_output(monkeypatch: Any) -> None:
             return requested or "installed:7b"
 
     monkeypatch.setattr(cli, "OllamaCatalog", Catalog)
-    result = CliRunner().invoke(app, ["agent", "run", "Read file"])
+    result = CliRunner().invoke(app, ["agent", "run", "Read file", "-m", "installed:7b"])
     assert result.exit_code == 0, result.output
     assert configured["model"] == "installed:7b"
     assert configured["workspace"] == Path.cwd().resolve()

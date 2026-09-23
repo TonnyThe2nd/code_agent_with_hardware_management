@@ -19,7 +19,11 @@ class OllamaCatalog:
         for item in response.json()["models"]:
             info = httpx.post(f"{self._base_url}/api/show", json={"model": item["name"]}, timeout=self._timeout)
             info.raise_for_status()
+            metadata = info.json().get("model_info", {})
+            architecture = metadata.get("general.architecture", "")
             models.append({"name": item["name"], "size": item.get("size", 0),
+                           "parameter_count": metadata.get("general.parameter_count", 0),
+                           "context_length": metadata.get(f"{architecture}.context_length", 0),
                            "capabilities": info.json().get("capabilities", [])})
         return models
 
@@ -45,6 +49,7 @@ class OllamaProvider:
     def __init__(
         self, model: str, base_url: str = "http://localhost:11434",
         tools_schema: list[dict[str, Any]] | None = None, timeout: float = 120.0,
+        num_ctx: int | None = None,
     ) -> None:
         if not isinstance(model, str) or not model.strip():
             raise ValueError("Model must not be empty")
@@ -56,6 +61,9 @@ class OllamaProvider:
         self._base_url = base_url.rstrip("/")
         self._tools_schema: list[dict[str, Any]] = json.loads(json.dumps(tools_schema or []))
         self._timeout = timeout
+        if num_ctx is not None and (type(num_ctx) is not int or num_ctx < 1):
+            raise ValueError("num_ctx must be a positive integer")
+        self._num_ctx = num_ctx
 
     def chat(self, messages: list[Message]) -> Message:
         payload: dict[str, Any] = {
@@ -65,6 +73,8 @@ class OllamaProvider:
         }
         if self._tools_schema:
             payload["tools"] = self._tools_schema
+        if self._num_ctx is not None:
+            payload["options"] = {"num_ctx": self._num_ctx}
         response = httpx.post(
             f"{self._base_url}/api/chat", json=payload, timeout=self._timeout,
         )

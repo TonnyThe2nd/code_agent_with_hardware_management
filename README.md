@@ -1,5 +1,37 @@
 # Agente de código local
 
+## Planejamento em camadas
+
+Dentro de `backend`, execute:
+
+```powershell
+python -m src.main agent plan "Implemente validacao de entrada e testes" --workspace .
+```
+
+`config/models.yaml` define os tiers executor e planner. `--catalog CAMINHO`
+permite outro catálogo e `--timeout 180` ajusta a espera pela decomposição.
+O maior planner que cabe é escolhido para decompor; sem planner que caiba,
+usa o maior executor. O modelo escolhido precisa estar instalado no Ollama local.
+Use `ollama pull NOME:TAG` para instalar os modelos do catálogo.
+Não há download automático nem substituição silenciosa de um planner ausente.
+
+O roteamento usa exatamente `size_gb <= budget_gb`, conforme o orçamento do
+contexto hardware: simples vai para o menor executor, moderada para o maior
+executor, complexa para o maior planner (ou maior executor como fallback).
+Essa regra difere da estimativa conservadora de `agent run`; tamanho Q4 não
+garante memória suficiente para inferência. Os valores do YAML são estimativas.
+O LLM decompõe e classifica complexidade; a escolha de modelos é código puro.
+
+Esta etapa gera e apresenta o plano, dependências e avisos. Não executa subtarefas,
+não mantém dois modelos simultaneamente em memória e não oferece `--execute`.
+O workspace identifica o destino futuro; não é lido nem escrito pelo planejador.
+Modelos atribuídos mas não instalados são apontados em amarelo. Um modelo de
+planejamento sem tools pode gerar JSON; isso não garante que possa executar
+futuramente as ferramentas do agente. Mais de dois modelos gera um aviso,
+não um bloqueio. `min_executor_params_b` fica reservado na política: o plano
+contém nomes, não metadados suficientes para validar esse limite.
+Sem PyYAML, o loader avisa e usa o catálogo JSON embutido, ignorando o YAML solicitado.
+
 Python 3.11+, DDD e Clean Architecture. O contexto `hardware` detecta recursos;
 `agent` conversa com modelos Ollama e oferece leitura, escrita, listagem e comandos controlados.
 
@@ -43,9 +75,19 @@ executam o loop de ferramentas; um nome contendo `coder` não garante suporte a 
 O catálogo consulta `/api/tags` e `/api/show`, conforme a API oficial:
 https://docs.ollama.com/api e https://docs.ollama.com/capabilities/tool-calling.
 
-Precedência: `--model` > `CODE_AGENT_MODEL` > seleção automática quando existe
-exatamente um modelo compatível. Se houver vários, o agente pede uma escolha
-explícita; não troca de modelo silenciosamente nem repete uma sessão que já escreveu arquivos.
+Precedência: `--model` > `CODE_AGENT_MODEL` > seleção automática por hardware.
+Sem modelo explícito, o projeto usa `DetectHardwareUseCase` e seu orçamento de
+RAM/VRAM; na rota de RAM, limita também a 85% da memória disponível no momento.
+Filtra os modelos instalados com `tools` e contexto suficiente e escolhe o maior
+número de parâmetros que caiba na estimativa. O teto automático é 250 bilhões
+de parâmetros (inclui 235B). Se os parâmetros não forem informados pelo Ollama,
+o tamanho é usado como desempate, sem comprovação desse teto para o modelo.
+A heurística é `1,25 × tamanho em GiB + max(1, contexto / 4096) GiB`.
+Ela não garante ausência de OOM nem identifica o melhor modelo por benchmark;
+quantização, arquitetura, KV cache e outras aplicações afetam a memória real.
+Não soma RAM com VRAM e não verifica VRAM livre neste momento.
+Se nenhum modelo couber, informa o problema em vez de selecionar um incompatível.
+Não troca de modelo silenciosamente nem repete uma sessão que já escreveu arquivos.
 Cada sessão usa um modelo. Você pode alternar entre sessões; não há roteamento
 automático de tarefas entre vários modelos nem suporte implementado a outros provedores.
 
@@ -60,6 +102,19 @@ Também existem `--base-url` e `--timeout`. Use apenas servidores de confiança:
 mensagens e conteúdos lidos são enviados ao endpoint escolhido. As variáveis
 acima valem para o terminal atual; nenhum arquivo `.env` é carregado automaticamente.
 O tamanho em disco mostrado pelo catálogo não estima toda a RAM/VRAM necessária.
+
+```powershell
+python -m src.main agent run "Analise o projeto" --num-ctx 4096
+python -m src.main agent run "Analise o projeto" --base-url http://SERVIDOR:11434 --memory-budget 180 --timeout 600
+```
+
+`--memory-budget` representa memória **utilizável**, em GiB, já descontada a
+reserva do servidor. Para endpoint remoto, é obrigatório informar esse orçamento
+ou escolher `--model`; o hardware local não representa o servidor remoto.
+Mesmo um endpoint localhost pode ser um túnel: nesse caso informe o orçamento
+do servidor explicitamente. `--num-ctx` é enviado ao Ollama (padrão 4096).
+Escolher `--model` ou `CODE_AGENT_MODEL` ignora a seleção por memória, mantendo
+a verificação de instalação e suporte a ferramentas. Não há download automático.
 
 ## Execução de testes pelo agente
 

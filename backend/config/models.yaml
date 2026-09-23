@@ -1,0 +1,21 @@
+models:
+  - name: "qwen2.5-coder:1.5b"
+    params_b: 1.5
+    size_gb: 1.1
+    tier: "executor"
+    context_window: 32768
+  - name: "qwen2.5-coder:3b"
+    params_b: 3
+    size_gb: 2.2
+    tier: "executor"
+    context_window: 32768
+  - name: "qwen2.5-coder:7b"
+    params_b: 7
+    size_gb: 4.8
+    tier: "planner"
+    context_window: 32768
+  - name: "qwen2.5-coder:14b"
+    params_b: 14
+    size_gb: 9.5
+    tier: "planner"
+    context_window: 32768

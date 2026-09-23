@@ -1,5 +1,10 @@
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
+from ...hardware.application.dto import HardwareDTO
+from ..domain.routing.entities import ModelCatalog, RoutingPlan
+from ..domain.routing.services import TaskDecomposer, ModelRouter
+from ..domain.routing.policies import RoutingPolicy
+from .dto import RoutingPlanDTO, SubtaskDTO
 
 from ..domain.entities import AgentSession
 from ..domain.policies import SafetyPolicy
@@ -63,4 +68,32 @@ class RunAgentSessionUseCase:
             final_message=session.messages[-1].content if session.is_done() else None,
             iterations=iterations,
             messages_count=len(session.messages),
+        )
+
+
+class HardwareBudgetProvider(Protocol):
+    def execute(self) -> HardwareDTO: ...
+
+
+class PlanAndRouteUseCase:
+    def __init__(self, hardware_use_case: HardwareBudgetProvider, llm: LLMProvider, catalog: ModelCatalog) -> None:
+        self._hardware = hardware_use_case
+        self._llm = llm
+        self._catalog = catalog
+
+    def execute(self, task: str) -> RoutingPlanDTO:
+        hardware = self._hardware.execute()
+        router = ModelRouter(self._catalog, hardware.budget_gb)
+        if not self._catalog.fits(hardware.budget_gb):
+            from ..domain.routing.services import NoModelFitsError
+            raise NoModelFitsError("No model fits; planning was not started")
+        subtasks = TaskDecomposer(self._llm).decompose(task)
+        plan = router.route_plan(RoutingPlan(original_task=task, subtasks=subtasks))
+        return RoutingPlanDTO(
+            plan_id=plan.id, original_task=plan.original_task,
+            subtasks=[SubtaskDTO(item.id, item.description, item.complexity.value,
+                                 item.expected_output, item.assigned_model, item.depends_on)
+                      for item in plan.subtasks],
+            budget_gb=hardware.budget_gb, models_used=sorted(plan.models_in_plan()),
+            warnings=RoutingPolicy().validate(plan),
         )

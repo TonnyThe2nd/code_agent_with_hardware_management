@@ -1,17 +1,25 @@
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
+import psutil
+
+from ...hardware.application.use_cases import DetectHardwareUseCase
+from ...hardware.infrastructure.composite_probe import CompositeProbe
+from ..application.model_selection import SelectModelUseCase
 
 from ..application.use_cases import RunAgentSessionUseCase
 from ..domain.value_objects import Message, MessageRole
 from ..infrastructure.llm.ollama_provider import OllamaCatalog, OllamaProvider
 from ..infrastructure.tools import build_default_registry
+from .planning import plan
 
 
 app = typer.Typer(help="Execute o agente local com Ollama.")
+app.command("plan")(plan)
 
 
 def configure_output() -> None:
@@ -37,6 +45,9 @@ def run(
     timeout: float = typer.Option(120.0, "--timeout", min=0.1, envvar="CODE_AGENT_TIMEOUT"),
     allow_tests: bool = typer.Option(False, "--allow-tests", help="Permite pytest apenas em Docker sem rede."),
     test_image: str = typer.Option("code-agent-tests:local", "--test-image", envvar="CODE_AGENT_TEST_IMAGE"),
+    num_ctx: int = typer.Option(4096, "--num-ctx", min=1),
+    memory_budget: float | None = typer.Option(None, "--memory-budget", min=0.1,
+                                              help="Orcamento utilizavel do servidor Ollama, em GiB."),
 ) -> None:
     configure_output()
     console = Console()
@@ -56,9 +67,27 @@ def run(
             console.print(message.content[:200], style="dim", markup=False, highlight=False)
 
     try:
-        selected_model = OllamaCatalog(base_url).select(model)
+        catalog = OllamaCatalog(base_url)
+        if model:
+            selected_model = catalog.select(model)
+        else:
+            budget = memory_budget
+            if budget is None:
+                if urlparse(base_url).hostname not in ("localhost", "127.0.0.1", "::1"):
+                    raise ValueError("Ollama remoto: informe --memory-budget do servidor ou --model.")
+                hardware = DetectHardwareUseCase(CompositeProbe()).execute()
+                budget = hardware.budget_gb
+                if hardware.budget_source == "ram":
+                    budget = min(budget, psutil.virtual_memory().available / (1024 ** 3) * 0.85)
+            selection = SelectModelUseCase().execute(catalog.models(), budget, num_ctx)
+            selected_model = selection.name
+            error_console.print(
+                f"Modelo automatico: {selected_model} | estimativa {selection.estimated_gb:.1f} GiB "
+                f"/ orcamento {selection.budget_gb:.1f} GiB | contexto {num_ctx}",
+                markup=False,
+            )
         registry = build_default_registry(workspace, allow_tests=allow_tests, test_image=test_image)
-        provider = OllamaProvider(selected_model, base_url=base_url, tools_schema=registry.schemas(), timeout=timeout)
+        provider = OllamaProvider(selected_model, base_url=base_url, tools_schema=registry.schemas(), timeout=timeout, num_ctx=num_ctx)
         use_case = RunAgentSessionUseCase(provider, registry, workspace, max_iterations, allow_tests=allow_tests)
         result = use_case.execute(prompt, on_message=on_message)
     except Exception as exc:
