@@ -7,7 +7,10 @@ from .registry import resolve_workspace_path
 SCHEMA: dict[str, Any] = {
     "type": "function",
     "function": {
-        "name": "write_file", "description": "Write a UTF-8 workspace file.",
+        "name": "write_file", "description": (
+            "Write a UTF-8 workspace file. For an existing file, first read it and "
+            "preserve unrelated content; write only the minimal requested change."
+        ),
         "parameters": {
             "type": "object",
             "properties": {"path": {"type": "string"}, "content": {"type": "string"}},

@@ -6,7 +6,7 @@ import pytest
 from src.agent.infrastructure.llm.structured_actions import StructuredActions
 from src.agent.infrastructure.llm import ollama_provider
 from src.agent.infrastructure.tools.read_file import SCHEMA
-from src.agent.domain.value_objects import Message, MessageRole
+from src.agent.domain.value_objects import Message, MessageRole, ToolCall
 from src.agent.domain.policies import SafetyPolicy
 
 
@@ -39,6 +39,12 @@ def test_rejects_invalid_envelopes(content: str) -> None:
 def test_structured_actions_still_require_safety_policy() -> None:
     action = StructuredActions([SCHEMA]).parse('{"action":"read_file","arguments":{"path":"../secret"}}')
     assert not SafetyPolicy().is_allowed(action.tool_calls[0])[0]
+
+
+def test_policy_allows_safe_targeted_pytest_only_when_enabled() -> None:
+    call = ToolCall("1", "run_command", (("command", "python -m pytest tests/agent -q"),))
+    assert not SafetyPolicy().is_allowed(call)[0]
+    assert SafetyPolicy(allow_tests=True).is_allowed(call)[0]
 
 
 def test_provider_sends_schema_without_native_tools(monkeypatch: Any) -> None:

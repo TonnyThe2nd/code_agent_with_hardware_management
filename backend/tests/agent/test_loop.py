@@ -233,7 +233,7 @@ def test_tool_factories_and_registry(tmp_path: Path) -> None:
     assert registry.execute(ToolCall("4", "unknown")).is_error
     assert registry.execute(ToolCall("5", "read_file")).is_error
     schemas = registry.schemas()
-    assert len(schemas) == 4
+    assert len(schemas) == 10
     schemas[0]["function"]["name"] = "changed"
     assert registry.schemas()[0]["function"]["name"] != "changed"
     assert SafetyPolicy().is_allowed(ToolCall("6", "read_file", (("path", "file"), ("max_bytes", 3)))) == (True, None)
@@ -257,6 +257,21 @@ def test_factories_reject_external_paths(tmp_path: Path) -> None:
             else:
                 raise AssertionError("External path accepted")
     assert not (tmp_path / "outside").exists()
+
+
+def test_developer_inspection_tools_offer_context_and_diagnostics(tmp_path: Path) -> None:
+    (tmp_path / "package").mkdir()
+    (tmp_path / "package" / "service.py").write_text("class Service:\n    pass\n", encoding="utf-8")
+    registry = build_default_registry(tmp_path)
+    code = registry.execute(ToolCall("1", "search_code", (("query", "Service"),)))
+    assert not code.is_error and '"line": 1' in code.content
+    symbol = registry.execute(ToolCall("2", "find_symbol", (("symbol", "Service"),)))
+    assert not symbol.is_error and "service.py" in symbol.content
+    excerpt = registry.execute(ToolCall("3", "read_file_range", (("path", "package/service.py"), ("start_line", 1), ("end_line", 1))))
+    assert excerpt.content == "1: class Service:"
+    diagnostics = registry.execute(ToolCall("4", "inspect_diagnostics"))
+    assert not diagnostics.is_error and '"diagnostics": []' in diagnostics.content
+    assert not registry.execute(ToolCall("5", "git_status")).is_error
 
 
 def test_command_contract_and_truncation(tmp_path: Path, monkeypatch: Any) -> None:

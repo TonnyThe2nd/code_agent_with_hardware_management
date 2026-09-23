@@ -1,3 +1,5 @@
+import shlex
+
 from .value_objects import FilePath, ToolCall
 
 
@@ -16,22 +18,26 @@ class SafetyPolicy:
         arguments = dict(call.arguments)
         expected: dict[str, set[str]] = {
             "read_file": {"path"}, "write_file": {"path", "content"},
-            "list_dir": set(), "run_command": {"command"},
+            "list_dir": set(), "run_command": {"command"}, "read_file_range": {"path", "start_line", "end_line"},
+            "search_code": {"query"}, "find_symbol": {"symbol"}, "git_status": set(),
+            "git_diff": set(), "inspect_diagnostics": set(),
         }
         optional: dict[str, set[str]] = {
             "read_file": {"max_bytes"}, "write_file": set(),
-            "list_dir": {"path"}, "run_command": {"cwd"},
+            "list_dir": {"path"}, "run_command": {"cwd"}, "read_file_range": set(),
+            "search_code": {"path", "max_results"}, "find_symbol": {"path", "max_results"},
+            "git_status": set(), "git_diff": {"path"}, "inspect_diagnostics": {"path"},
         }
         if call.name not in expected:
             return False, "Unknown tool: " + call.name
         if not expected[call.name] <= set(arguments) or set(arguments) - expected[call.name] - optional[call.name]:
             return False, "Invalid tool arguments"
-        if any(not isinstance(value, str) for key, value in arguments.items() if key != "max_bytes"):
-            return False, "Tool arguments must be strings except max_bytes"
-        if "max_bytes" in arguments:
-            limit = arguments["max_bytes"]
+        if any(not isinstance(value, str) for key, value in arguments.items() if key not in {"max_bytes", "start_line", "end_line", "max_results"}):
+            return False, "Tool arguments must be strings except numeric limits"
+        for numeric in {"max_bytes", "start_line", "end_line", "max_results"} & set(arguments):
+            limit = arguments[numeric]
             if type(limit) is not int or limit < 1:
-                return False, "max_bytes must be a positive integer"
+                return False, f"{numeric} must be a positive integer"
         for key in ("path", "cwd"):
             if key not in arguments:
                 continue
@@ -44,13 +50,19 @@ class SafetyPolicy:
                 return False, str(exc)
         if call.name == "run_command":
             command = arguments["command"]
-            allowed = self.allowed_commands + ((("python", "-m", "pytest"),) if self._allow_tests else ())
-            if not isinstance(command, str) or tuple(command.split()) not in allowed:
+            try:
+                words = tuple(shlex.split(command))
+            except ValueError:
+                return False, "Invalid command syntax"
+            allowed = self.allowed_commands
+            test_command = words[:3] == ("python", "-m", "pytest") and all(
+                not part.startswith("-") or part == "-q" for part in words[3:]
+            )
+            if not isinstance(command, str) or (words not in allowed and not (self._allow_tests and test_command)):
                 return False, "Command blocked; allowed: python --version, git --version"
         return True, None
 
     def validate(self, call: ToolCall) -> None:
-        """Preserve the exception-based contract used by existing adapters."""
         allowed, reason = self.is_allowed(call)
         if not allowed:
             raise ValueError(reason)

@@ -10,7 +10,8 @@ from .value_objects import ModelSpec, ModelTier, Subtask, TaskComplexity
 
 DECOMPOSITION_SYSTEM_PROMPT = (
     "Decompose the task into an ordered JSON array, no tool calls. "
-    "Each item has id (string), description, complexity, expected_output, depends_on (array of earlier ids). "
+    "Each item has id (string), description, complexity, expected_output, depends_on (array of earlier ids), "
+    "target_files (array of likely relative paths), risk (low/medium/high), expected_evidence, success_criteria. "
     "Use ids 1, 2, 3, ... and only backward dependencies. "
     "SIMPLE: rename, format, extract, list, move. "
     "MODERATE: implement a function, write a test, local refactoring. "
@@ -52,6 +53,10 @@ class TaskDecomposer:
                     id=item.get("id", str(index)), description=item["description"],
                     complexity=TaskComplexity(item["complexity"]),
                     expected_output=item["expected_output"], depends_on=tuple(dependencies),
+                    target_files=tuple(item.get("target_files", ())),
+                    risk=item.get("risk", "high" if item["complexity"] == "complex" else "medium"),
+                    expected_evidence=item.get("expected_evidence", "Relevant inspection and validation output"),
+                    success_criteria=item.get("success_criteria", item["expected_output"]),
                 ))
             return RoutingPlan(original_task=task, subtasks=subtasks).subtasks
         except (ValueError, TypeError, KeyError, AttributeError):

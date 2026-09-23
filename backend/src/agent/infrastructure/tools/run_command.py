@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import shutil
 import sys
+import shlex
 from typing import Any, Protocol
 from uuid import uuid4
 
@@ -43,7 +44,10 @@ def run_command(
             raise NotADirectoryError(str(workdir))
         if not isinstance(command, str) or not command.strip():
             raise ValueError("Command must not be empty")
-        words = tuple(command.split())
+        try:
+            words = tuple(shlex.split(command))
+        except ValueError as exc:
+            raise ValueError("Invalid command syntax") from exc
         container_name: str | None = None
         docker: str | None = None
         if words == ("python", "--version"):
@@ -53,7 +57,9 @@ def run_command(
             if executable is None or Path(executable).resolve().is_relative_to(root):
                 raise PermissionError("Git must be installed outside the workspace")
             argv = [executable, "--version"]
-        elif words == ("python", "-m", "pytest") and allow_tests:
+        elif words[:3] == ("python", "-m", "pytest") and allow_tests and all(
+            not item.startswith("-") or item == "-q" for item in words[3:]
+        ):
             docker = shutil.which("docker")
             if docker is None or Path(docker).resolve().is_relative_to(root):
                 raise RuntimeError("Docker nao encontrado. Instale Docker Desktop e construa a imagem de testes.")
@@ -72,7 +78,7 @@ def run_command(
                     "--mount", f"type=bind,source={root},target=/workspace,readonly",
                     "--workdir", container_cwd, "--env", "PYTHONDONTWRITEBYTECODE=1",
                     "--entrypoint", "python", test_image, "-B", "-m", "pytest",
-                    "-p", "no:cacheprovider"]
+                    "-p", "no:cacheprovider", *words[3:]]
         else:
             raise PermissionError("Command blocked. Use version queries or enable isolated pytest with --allow-tests.")
         try:

@@ -76,6 +76,29 @@ Sem PyYAML, o loader avisa e usa o catálogo JSON embutido, ignorando o YAML sol
 Python 3.11+, DDD e Clean Architecture. O contexto `hardware` detecta recursos;
 `agent` conversa com modelos Ollama e oferece leitura, escrita, listagem e comandos controlados.
 
+## Fluxo de desenvolvimento orientado por contexto
+
+Cada sessão recebe um inventário limitado de caminhos do repositório, sem injetar
+o conteúdo dos arquivos no prompt. O agente começa por `git_status`, `search_code`
+ou `find_symbol`, lê trechos com `read_file_range`, declara um plano curto e só
+então edita. Após uma escrita, usa `git_diff` e `inspect_diagnostics`; com
+`--allow-tests`, pode executar o menor alvo afetado, como `python -m pytest
+tests/agent -q`, no mesmo container Docker isolado e sem rede. As novas ferramentas
+são somente leitura e continuam confinadas ao workspace.
+
+O comando `agent plan` apresenta, para cada subtarefa, arquivos prováveis, risco,
+modelo e evidência esperada. Uma subtarefa de alto risco exige a confirmação
+explícita `--confirm-high-risk` junto com `--execute`. Ao final, `agent run` e
+`agent plan --execute` apresentam arquivos impactados, revisão de diff e a
+evidência de diagnósticos/testes realmente produzida; o agente não assume que
+uma escrita foi validada sem essa evidência.
+
+Quando uma sessão usa `write_file`, o agente executa automaticamente
+`inspect_diagnostics` antes de encerrar e devolve o resultado ao modelo para uma
+correção focada. Leituras idênticas de arquivo ou faixa são reutilizadas durante
+a sessão e esse cache é invalidado a cada escrita, reduzindo chamadas repetidas
+sem manter conteúdo obsoleto após uma alteração.
+
 ## Instalação no Windows (PowerShell)
 
 Na raiz do repositório:

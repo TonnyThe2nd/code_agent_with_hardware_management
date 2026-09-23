@@ -23,6 +23,18 @@ def test_decomposer_parseia_json_valido() -> None:
     subtasks = TaskDecomposer(FakeLLM(VALID)).decompose("Explore")
     assert subtasks[0].id == "1"
     assert subtasks[0].complexity is TaskComplexity.SIMPLE
+    assert subtasks[0].risk == "medium"
+    assert subtasks[0].success_criteria == "File list"
+
+
+def test_decomposer_preserves_developer_plan_evidence() -> None:
+    content = ('[{"id":"1","description":"Change service","complexity":"moderate",'
+               '"expected_output":"Updated service","depends_on":[],"target_files":["src/service.py"],'
+               '"risk":"high","expected_evidence":"targeted tests","success_criteria":"tests pass"}]')
+    subtask = TaskDecomposer(FakeLLM(content)).decompose("Task")[0]
+    assert subtask.target_files == ("src/service.py",)
+    assert subtask.risk == "high"
+    assert subtask.expected_evidence == "targeted tests"
 
 
 def test_decomposer_faz_fallback_em_json_invalido() -> None:
@@ -46,10 +58,10 @@ def test_invalid_dependency_falls_back() -> None:
 def test_use_case_and_catalog() -> None:
     class Hardware:
         def execute(self) -> HardwareDTO:
-            return HardwareDTO(8, 4, "cpu", "fake", None, 5, "ram")
+            return HardwareDTO(8, 4, "cpu", "fake", None, 7, "ram")
 
     catalog = load_catalog(Path(__file__).resolve().parents[4] / "config/models.yaml")
     result = PlanAndRouteUseCase(Hardware(), FakeLLM(VALID), catalog).execute("Task")
-    assert result.budget_gb == 5
-    assert result.models_used == ["qwen2.5-coder:1.5b"]
+    assert result.budget_gb == 7
+    assert result.models_used == ["qwen3.5:9b"]
     assert result.to_dict()["subtasks"][0]["depends_on"] == []
