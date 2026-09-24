@@ -26,10 +26,15 @@ class SubtaskDTO:
     expected_output: str
     assigned_model: str | None
     depends_on: tuple[str, ...] = ()
+    target_files: tuple[str, ...] = ()
+    risk: str = "medium"
+    expected_evidence: str = "Relevant inspection and validation output"
+    success_criteria: str = "Requested behavior is implemented without regressions"
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["depends_on"] = list(self.depends_on)
+        result["target_files"] = list(self.target_files)
         return result
 
 

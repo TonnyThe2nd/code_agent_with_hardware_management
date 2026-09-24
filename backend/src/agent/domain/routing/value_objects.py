@@ -41,6 +41,10 @@ class Subtask:
     expected_output: str
     assigned_model: str | None = None
     depends_on: tuple[str, ...] = ()
+    target_files: tuple[str, ...] = ()
+    risk: str = "medium"
+    expected_evidence: str = "Relevant inspection and validation output"
+    success_criteria: str = "Requested behavior is implemented without regressions"
 
     def __post_init__(self) -> None:
         if any(not isinstance(value, str) or not value.strip()
@@ -58,3 +62,12 @@ class Subtask:
             raise ValueError("Dependencies must be immutable ids")
         if self.id in self.depends_on or len(set(self.depends_on)) != len(self.depends_on):
             raise ValueError("Self dependencies and duplicate dependencies are forbidden")
+        if not isinstance(self.target_files, tuple) or any(not isinstance(path, str) or not path.strip()
+                                                           for path in self.target_files):
+            raise ValueError("Target files must be immutable nonempty paths")
+        if self.risk not in {"low", "medium", "high"}:
+            raise ValueError("Risk must be low, medium, or high")
+        if not isinstance(self.expected_evidence, str) or not self.expected_evidence.strip():
+            raise ValueError("Expected evidence must not be empty")
+        if not isinstance(self.success_criteria, str) or not self.success_criteria.strip():
+            raise ValueError("Success criteria must not be empty")

@@ -11,12 +11,37 @@ from ...hardware.application.use_cases import DetectHardwareUseCase
 from ...hardware.infrastructure.composite_probe import CompositeProbe
 from ..application.use_cases import PlanAndRouteUseCase, RunAgentSessionUseCase
 from ..application.execute_plan import ExecuteRoutingPlanUseCase
+from ..application.impact_review import ReviewImpactUseCase
 from ..domain.value_objects import Message, MessageRole
 from ..infrastructure.tools import build_default_registry
 from ..domain.routing.value_objects import ModelTier
+from ..domain.routing.entities import ModelCatalog
 from ..domain.routing.services import NoModelFitsError
 from ..infrastructure.catalog.yaml_loader import load_catalog
 from ..infrastructure.llm.ollama_provider import OllamaCatalog, OllamaProvider
+
+
+def select_planner_model(
+    requested_model: str | None, installed: dict[str, dict], catalog: ModelCatalog, budget_gb: float,
+) -> str:
+    if requested_model:
+        candidates = (requested_model, requested_model + ":latest")
+        selected = next((name for name in candidates if name in installed), None)
+        if selected is None:
+            raise ValueError(
+                f"Modelo de planejamento nao instalado: {requested_model}. "
+                f"Execute ollama pull {requested_model}."
+            )
+        return selected
+    planner = (catalog.largest_that_fits(budget_gb, ModelTier.PLANNER)
+               or catalog.largest_that_fits(budget_gb, ModelTier.EXECUTOR))
+    if planner is None:
+        raise NoModelFitsError("Nenhum modelo do catalogo cabe no orcamento detectado.")
+    candidates = (planner.name, planner.name + ":latest")
+    selected = next((name for name in candidates if name in installed), None)
+    if selected is None:
+        raise ValueError(f"Planner nao instalado: {planner.name}. Execute ollama pull {planner.name}.")
+    return selected
 
 
 class HardwareSnapshot:
@@ -34,12 +59,17 @@ def plan(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w", exists=True,
                                   file_okay=False, resolve_path=True),
     catalog_path: Path = typer.Option(Path(__file__).resolve().parents[3] / "config/models.yaml", "--catalog"),
+    model: str | None = typer.Option(
+        None, "--model", "-m", envvar="CODE_AGENT_PLANNER_MODEL",
+        help="Modelo instalado usado somente para decompor a tarefa.",
+    ),
     timeout: float = typer.Option(120.0, "--timeout", min=0.1),
     execute: bool = typer.Option(False, "--execute", help="Executa as subtarefas e pode alterar arquivos."),
     max_iterations: int = typer.Option(10, "--max-iter", min=1),
     allow_tests: bool = typer.Option(False, "--allow-tests"),
     test_image: str = typer.Option("code-agent-tests:local", "--test-image"),
     action_mode: str = typer.Option("structured", "--action-mode", help="structured ou native"),
+    confirm_high_risk: bool = typer.Option(False, "--confirm-high-risk", help="Confirma execucao de subtarefas de alto risco."),
 ) -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -53,21 +83,17 @@ def plan(
             raise ValueError("--action-mode deve ser structured ou native")
         catalog = load_catalog(catalog_path)
         hardware = DetectHardwareUseCase(CompositeProbe()).execute()
-        planner = (catalog.largest_that_fits(hardware.budget_gb, ModelTier.PLANNER)
-                   or catalog.largest_that_fits(hardware.budget_gb, ModelTier.EXECUTOR))
-        if planner is None:
-            raise NoModelFitsError("Nenhum modelo do catalogo cabe no orcamento detectado.")
         installed = {item["name"]: item for item in OllamaCatalog().models()}
-        if planner.name not in installed:
-            raise ValueError(f"Planner nao instalado: {planner.name}. Execute ollama pull {planner.name}.")
-        provider = OllamaProvider(planner.name, timeout=timeout, keep_alive=0)
+        planner_model = select_planner_model(model, installed, catalog, hardware.budget_gb)
+        provider = OllamaProvider(planner_model, timeout=timeout, keep_alive=0)
         result = PlanAndRouteUseCase(HardwareSnapshot(hardware), provider, catalog).execute(task)
-        console.print(f"Planner: {planner.name} | Orcamento: {result.budget_gb:.1f} GB", markup=False)
-        table = Table("#", "Subtarefa", "Complexidade", "Modelo", "Depende de")
+        console.print(f"Planner: {planner_model} | Orcamento: {result.budget_gb:.1f} GB", markup=False)
+        table = Table("#", "Subtarefa", "Complexidade", "Arquivos alvo", "Risco", "Modelo", "Evidencia")
         for item in result.subtasks:
             table.add_row(*(Text(value) for value in (
-                item.id, item.description, item.complexity, item.assigned_model or "-",
-                ", ".join(item.depends_on) or "-",
+                item.id, item.description, item.complexity,
+                ", ".join(item.target_files) or "a descobrir", item.risk,
+                item.assigned_model or "-", item.expected_evidence,
             )))
         console.print(table)
         for warning in result.warnings:
@@ -78,6 +104,8 @@ def plan(
         if not execute:
             console.print(f"Plano apenas; nenhum arquivo alterado em {workspace}.", markup=False)
             return
+        if any(item.risk == "high" for item in result.subtasks) and not confirm_high_risk:
+            raise ValueError("Plano contem alteracao de alto risco. Revise o plano e execute novamente com --confirm-high-risk.")
         for name in {item.assigned_model for item in result.subtasks}:
             if name not in installed or "tools" not in installed[name].get("capabilities", []):
                 raise ValueError(f"Execucao requer modelo instalado com tools: {name}. Nenhuma subtarefa iniciada.")
@@ -114,10 +142,16 @@ def plan(
             console.print(f"Interrompido em {execution.failed_subtask}: {execution.error}. "
                           "Alteracoes anteriores permanecem no workspace.", style="red", markup=False)
             raise typer.Exit(2)
-        if registry.changed_files:
-            console.print("Arquivos escritos pelas ferramentas: " + ", ".join(sorted(registry.changed_files)),
-                          style="green", markup=False)
-            console.print("Sessoes encerradas. Escritas registradas nao comprovam que a alteracao funciona; revise o diff.")
+        review = ReviewImpactUseCase().execute(registry)
+        if review.changed_files:
+            console.print("Arquivos impactados: " + ", ".join(review.changed_files), style="green", markup=False)
+            console.print("Diff revisado: " + ("sim" if review.inspected_diff else "nao"), markup=False)
+            if review.validation:
+                console.print("Validacao: " + " | ".join(review.validation), style="green", markup=False)
+            if review.failures:
+                console.print("Evidencias de falha: " + " | ".join(review.failures), style="red", markup=False)
+            elif not review.inspected_diff:
+                console.print("Mudanca sem revisao de diff comprovada; revise antes de integrar.", style="yellow", markup=False)
         else:
             console.print("Sessoes encerradas SEM alteracoes de arquivos registradas. "
                           "Nao foi comprovada a implementacao solicitada.", style="yellow")

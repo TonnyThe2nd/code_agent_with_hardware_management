@@ -1,8 +1,16 @@
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from ...domain.value_objects import ToolCall, ToolResult
+
+
+@dataclass(frozen=True)
+class ToolActivity:
+    name: str
+    is_error: bool
+    summary: str
 
 
 def resolve_workspace_path(workspace: Path, value: str) -> Path:
@@ -26,6 +34,8 @@ def resolve_workspace_path(workspace: Path, value: str) -> Path:
 class ToolRegistry:
     def __init__(self) -> None:
         self.changed_files: set[str] = set()
+        self.activities: list[ToolActivity] = []
+        self._read_cache: dict[tuple[str, tuple[tuple[str, str | int], ...]], str] = {}
         self._tools: dict[str, Callable[..., str]] = {}
         self._schemas: dict[str, dict[str, Any]] = {}
 
@@ -47,11 +57,20 @@ class ToolRegistry:
         try:
             if call.name not in self._tools:
                 raise ValueError("Unknown tool: " + call.name)
-            content = self._tools[call.name](**dict(call.arguments))
+            cache_key = (call.name, call.arguments)
+            if call.name in {"read_file", "read_file_range"} and cache_key in self._read_cache:
+                content = self._read_cache[cache_key]
+            else:
+                content = self._tools[call.name](**dict(call.arguments))
+                if call.name in {"read_file", "read_file_range"}:
+                    self._read_cache[cache_key] = content
             if call.name == "write_file" and isinstance(content, str) and content.startswith("Written: "):
                 self.changed_files.add(content[len("Written: "):])
+                self._read_cache.clear()
             if not isinstance(content, str):
                 raise TypeError("Tool must return text")
-            return ToolResult(call.id, call.name, content)
+            result = ToolResult(call.id, call.name, content)
         except Exception as exc:
-            return ToolResult(call.id, call.name, str(exc)[:10_000], is_error=True)
+            result = ToolResult(call.id, call.name, str(exc)[:10_000], is_error=True)
+        self.activities.append(ToolActivity(result.name, result.is_error, result.content[:500]))
+        return result

@@ -12,6 +12,7 @@ from ...hardware.infrastructure.composite_probe import CompositeProbe
 from ..application.model_selection import SelectModelUseCase
 
 from ..application.use_cases import RunAgentSessionUseCase
+from ..application.impact_review import ReviewImpactUseCase
 from ..domain.value_objects import Message, MessageRole
 from ..infrastructure.llm.ollama_provider import OllamaCatalog, OllamaProvider
 from ..infrastructure.tools import build_default_registry
@@ -98,6 +99,14 @@ def run(
     if result.final_message is None:
         error_console.print("Limite de iterações atingido sem resposta final.", style="yellow")
         raise typer.Exit(code=2)
+    review = ReviewImpactUseCase().execute(registry)
+    if review.changed_files:
+        console.print("Arquivos impactados: " + ", ".join(review.changed_files), style="green", markup=False)
+        console.print("Diff revisado: " + ("sim" if review.inspected_diff else "nao"), markup=False)
+        if review.validation:
+            console.print("Validacao: " + " | ".join(review.validation), style="green", markup=False)
+        if review.failures:
+            console.print("Falhas de ferramenta: " + " | ".join(review.failures), style="red", markup=False)
     console.print(result.final_message, style="green", markup=False, highlight=False)
 
 
