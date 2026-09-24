@@ -18,7 +18,7 @@ class StructuredActions:
         if not allow_final and self._tools:
             variants = []
         for name, tool in self._tools.items():
-            if not allow_final and {"read_file", "list_dir"} & self._tools.keys() and name not in ("read_file", "list_dir"):
+            if not allow_final and "list_dir" in self._tools and name != "list_dir":
                 continue
             variants.append({"type": "object", "properties": {
                 "action": {"const": name}, "arguments": tool["parameters"],

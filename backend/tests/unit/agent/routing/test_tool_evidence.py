@@ -47,3 +47,17 @@ def test_same_content_does_not_claim_change(tmp_path: Path) -> None:
     result = registry.execute(ToolCall("1", "write_file", {"path": "existing.txt", "content": "same"}))
     assert not result.is_error
     assert not registry.changed_files
+
+
+def test_recoverable_tool_error_is_returned_to_model(tmp_path: Path) -> None:
+    llm = FakeLLM([
+        Message(MessageRole.ASSISTANT, tool_calls=(ToolCall("1", "read_file", {"path": "missing.py"}),)),
+        Message(MessageRole.ASSISTANT, tool_calls=(ToolCall("2", "list_dir", {"path": "."}),)),
+        Message(MessageRole.ASSISTANT, "Recovered"),
+    ])
+    result = RunAgentSessionUseCase(
+        llm, build_default_registry(tmp_path), tmp_path,
+        fail_on_tool_error=False, require_tool_activity=True,
+    ).execute("Inspect workspace")
+    assert result.final_message == "Recovered"
+    assert result.iterations == 3

@@ -6,6 +6,7 @@ import pytest
 from src.agent.infrastructure.llm.structured_actions import StructuredActions
 from src.agent.infrastructure.llm import ollama_provider
 from src.agent.infrastructure.tools.read_file import SCHEMA
+from src.agent.infrastructure.tools.list_dir import SCHEMA as LIST_DIR_SCHEMA
 from src.agent.domain.value_objects import Message, MessageRole
 from src.agent.domain.policies import SafetyPolicy
 
@@ -20,6 +21,12 @@ def test_valid_action_and_tool_history() -> None:
     assert json.loads(messages[1]["content"])["action"] == "read_file"
     assert json.loads(messages[2]["content"])["tool_result"] == "read_file"
     assert protocol.parse('{"action":"final","content":"done"}').content == "done"
+
+
+def test_first_action_is_forced_to_list_dir_when_available() -> None:
+    schema = StructuredActions([SCHEMA, LIST_DIR_SCHEMA]).schema(allow_final=False)
+    actions = [variant["properties"]["action"]["const"] for variant in schema["oneOf"]]
+    assert actions == ["list_dir"]
 
 
 @pytest.mark.parametrize("content", [

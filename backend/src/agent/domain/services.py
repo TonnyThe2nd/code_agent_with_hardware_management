@@ -34,7 +34,7 @@ class AgentLoop:
                 result = self._execute_tool(call)
                 turn.results.append(result)
                 session.messages.append(Message(
-                    MessageRole.TOOL, result.content,
+                    MessageRole.TOOL, ("ERROR: " if result.is_error else "") + result.content,
                     tool_call_id=result.tool_call_id, name=result.name,
                 ))
         return session, max_iterations

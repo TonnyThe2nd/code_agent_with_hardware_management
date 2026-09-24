@@ -13,6 +13,7 @@ from ..domain.services import AgentLoop
 from ..domain.value_objects import Message, MessageRole
 from .dto import AgentRunResult
 from .errors import NoToolActivityError
+from .workspace_provider import WorkspaceProvider
 
 
 DEFAULT_SYSTEM_PROMPT = (
@@ -35,11 +36,11 @@ class RunAgentSessionUseCase:
             raise ValueError("Workspace must be a Path")
         if type(max_iterations) is not int or max_iterations < 1:
             raise ValueError("max_iterations must be a positive integer")
-        self._llm = llm
         self._tools = tools
         self._workspace = workspace.resolve(strict=True)
         if not self._workspace.is_dir():
             raise ValueError("Workspace must be a directory")
+        self._llm = WorkspaceProvider(llm, self._workspace)
         self._max_iterations = max_iterations
         self._allow_tests = allow_tests
         self._fail_on_tool_error = fail_on_tool_error
@@ -67,7 +68,11 @@ class RunAgentSessionUseCase:
             session, used_iterations = loop.run(session, max_iterations=1)
             iterations += used_iterations
             if self._fail_on_tool_error:
-                errors = [result.content for result in session.turns[-1].results if result.is_error]
+                calls = {call.id: call for call in session.turns[-1].response.tool_calls}
+                errors = [
+                    f"{result.name} ({ {key: value for key, value in dict(calls[result.tool_call_id].arguments).items() if key in ('path', 'cwd')} }): {result.content}"
+                    for result in session.turns[-1].results if result.is_error
+                ]
                 if errors:
                     raise RuntimeError("Subtask tool failed: " + "; ".join(errors))
             if self._require_tool_activity and session.is_done() and not any(
@@ -84,7 +89,7 @@ class RunAgentSessionUseCase:
                 session.completed = False
                 session.messages.append(Message(MessageRole.USER,
                     "No tool was executed. Your previous text is not an action. "
-                    "Call a provided tool using the configured action protocol now. Start with list_dir or read_file. "
+                    "Call a provided tool using the configured action protocol now. Start with list_dir. "
                     "Only read_file, write_file, list_dir and run_command exist; apply_patch does not. "
                     "Use relative paths. Do not describe hypothetical calls as a final answer."))
                 correction_sent = True

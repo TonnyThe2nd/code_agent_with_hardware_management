@@ -5,8 +5,8 @@
 A execução de subtarefas usa `--action-mode structured` por padrão. O Ollama
 recebe um JSON Schema em `format`, e cada resposta deve ser uma ação conhecida
 com argumentos válidos ou `{"action":"final","content":"..."}`. A validação
-exige uma ação antes de liberar resposta final; se há ferramentas de leitura,
-a primeira ação fica restrita a `read_file` ou `list_dir`. Isso comprova uma
+exige uma ação antes de liberar resposta final; se `list_dir` está disponível,
+a primeira ação fica restrita a essa ferramenta. Isso comprova uma
 interação com o workspace, não que toda a implementação foi feita. A validação
 local rejeita texto em volta, ferramentas desconhecidas e argumentos de tipos
 incorretos. As ações passam pela mesma SafetyPolicy e ToolRegistry; não há eval
@@ -44,6 +44,15 @@ Todos os modelos atribuídos precisam estar instalados e declarar `tools` antes
 da primeira subtarefa. A execução usa as ferramentas reais, um modelo/subtarefa
 por vez, compartilhando o workspace e passando as respostas das dependências.
 O planejador não lê arquivos; cada executor recebe instruções para inspecioná-los.
+Se o executor enviar um caminho absoluto local dentro do workspace, a aplicação
+o resolve e converte para relativo antes da política de segurança. Caminhos
+externos, dependências de links para fora e segmentos `..` não são liberados.
+Em caso de erro, a mensagem identifica a ferramenta e o path/cwd rejeitado.
+Erros recuperáveis, como arquivo inexistente, voltam ao modelo para que ele
+possa listar o diretório e corrigir o caminho dentro de `--max-iter`. Eles não
+interrompem imediatamente o plano. A primeira ação estruturada de cada subtarefa
+é `list_dir`, evitando adivinhar nomes como `app.py`. Falhas persistentes ainda
+terminam pelo limite de iterações; nenhum erro libera caminhos externos.
 `keep_alive=0` solicita descarregamento após cada requisição, inclusive planejamento;
 isso pode tornar a execução mais lenta. Não descarrega modelos carregados por outros clientes.
 `--max-iter` vale por subtarefa. Falha HTTP, erro de ferramenta (verificado ao fim

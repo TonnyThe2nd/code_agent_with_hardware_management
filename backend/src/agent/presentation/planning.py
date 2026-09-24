@@ -87,7 +87,7 @@ def plan(
             llm = OllamaProvider(model, tools_schema=registry.schemas(), timeout=timeout,
                                  num_ctx=4096, keep_alive=0, action_mode=action_mode)
             return RunAgentSessionUseCase(llm, registry, workspace, max_iterations,
-                                         allow_tests=allow_tests, fail_on_tool_error=True,
+                                         allow_tests=allow_tests, fail_on_tool_error=False,
                                          require_tool_activity=True)
 
         def on_message(message: Message) -> None:
