@@ -22,6 +22,9 @@ python -m src.main agent plan "Implemente validacao de entrada e testes" --works
 
 `config/models.yaml` define os tiers executor e planner. `--catalog CAMINHO`
 permite outro catálogo e `--timeout 180` ajusta a espera pela decomposição.
+Use `--model NOME` (ou `CODE_AGENT_PLANNER_MODEL`) para escolher somente o
+modelo que decompõe a tarefa; os executores continuam sendo roteados pelo
+catálogo quando `--execute` é usado.
 O maior planner que cabe é escolhido para decompor; sem planner que caiba,
 usa o maior executor. O modelo escolhido precisa estar instalado no Ollama local.
 Use `ollama pull NOME:TAG` para instalar os modelos do catálogo.
@@ -37,7 +40,7 @@ O LLM decompõe e classifica complexidade; a escolha de modelos é código puro.
 Sem `--execute`, gera apenas o plano. Para executar as subtarefas:
 
 ```powershell
-python -m src.main agent plan "Implemente validacao de entrada e testes" --workspace . --execute --max-iter 10 --timeout 180
+python -m src.main agent plan "Implemente validacao de entrada e testes" --workspace . --model qwen2.5-coder:7b --execute --max-iter 10 --timeout 180
 ```
 
 Todos os modelos atribuídos precisam estar instalados e declarar `tools` antes

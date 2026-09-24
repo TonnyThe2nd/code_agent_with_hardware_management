@@ -15,9 +15,33 @@ from ..application.impact_review import ReviewImpactUseCase
 from ..domain.value_objects import Message, MessageRole
 from ..infrastructure.tools import build_default_registry
 from ..domain.routing.value_objects import ModelTier
+from ..domain.routing.entities import ModelCatalog
 from ..domain.routing.services import NoModelFitsError
 from ..infrastructure.catalog.yaml_loader import load_catalog
 from ..infrastructure.llm.ollama_provider import OllamaCatalog, OllamaProvider
+
+
+def select_planner_model(
+    requested_model: str | None, installed: dict[str, dict], catalog: ModelCatalog, budget_gb: float,
+) -> str:
+    if requested_model:
+        candidates = (requested_model, requested_model + ":latest")
+        selected = next((name for name in candidates if name in installed), None)
+        if selected is None:
+            raise ValueError(
+                f"Modelo de planejamento nao instalado: {requested_model}. "
+                f"Execute ollama pull {requested_model}."
+            )
+        return selected
+    planner = (catalog.largest_that_fits(budget_gb, ModelTier.PLANNER)
+               or catalog.largest_that_fits(budget_gb, ModelTier.EXECUTOR))
+    if planner is None:
+        raise NoModelFitsError("Nenhum modelo do catalogo cabe no orcamento detectado.")
+    candidates = (planner.name, planner.name + ":latest")
+    selected = next((name for name in candidates if name in installed), None)
+    if selected is None:
+        raise ValueError(f"Planner nao instalado: {planner.name}. Execute ollama pull {planner.name}.")
+    return selected
 
 
 class HardwareSnapshot:
@@ -35,6 +59,10 @@ def plan(
     workspace: Path = typer.Option(Path("."), "--workspace", "-w", exists=True,
                                   file_okay=False, resolve_path=True),
     catalog_path: Path = typer.Option(Path(__file__).resolve().parents[3] / "config/models.yaml", "--catalog"),
+    model: str | None = typer.Option(
+        None, "--model", "-m", envvar="CODE_AGENT_PLANNER_MODEL",
+        help="Modelo instalado usado somente para decompor a tarefa.",
+    ),
     timeout: float = typer.Option(120.0, "--timeout", min=0.1),
     execute: bool = typer.Option(False, "--execute", help="Executa as subtarefas e pode alterar arquivos."),
     max_iterations: int = typer.Option(10, "--max-iter", min=1),
@@ -55,16 +83,11 @@ def plan(
             raise ValueError("--action-mode deve ser structured ou native")
         catalog = load_catalog(catalog_path)
         hardware = DetectHardwareUseCase(CompositeProbe()).execute()
-        planner = (catalog.largest_that_fits(hardware.budget_gb, ModelTier.PLANNER)
-                   or catalog.largest_that_fits(hardware.budget_gb, ModelTier.EXECUTOR))
-        if planner is None:
-            raise NoModelFitsError("Nenhum modelo do catalogo cabe no orcamento detectado.")
         installed = {item["name"]: item for item in OllamaCatalog().models()}
-        if planner.name not in installed:
-            raise ValueError(f"Planner nao instalado: {planner.name}. Execute ollama pull {planner.name}.")
-        provider = OllamaProvider(planner.name, timeout=timeout, keep_alive=0)
+        planner_model = select_planner_model(model, installed, catalog, hardware.budget_gb)
+        provider = OllamaProvider(planner_model, timeout=timeout, keep_alive=0)
         result = PlanAndRouteUseCase(HardwareSnapshot(hardware), provider, catalog).execute(task)
-        console.print(f"Planner: {planner.name} | Orcamento: {result.budget_gb:.1f} GB", markup=False)
+        console.print(f"Planner: {planner_model} | Orcamento: {result.budget_gb:.1f} GB", markup=False)
         table = Table("#", "Subtarefa", "Complexidade", "Arquivos alvo", "Risco", "Modelo", "Evidencia")
         for item in result.subtasks:
             table.add_row(*(Text(value) for value in (
